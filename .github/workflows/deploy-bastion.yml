@@ -191,8 +191,9 @@ jobs:
           echo "task_id=$TASK_ID" >> $GITHUB_OUTPUT
           echo "Task started: $TASK_ID"
 
-      - name: Oczekiwanie na uruchomienie tasku i pobranie logów
+       - name: Oczekiwanie na uruchomienie tasku i pobranie logów
         if: github.event.inputs.action == 'START'
+        id: wait-and-logs
         run: |
           CLUSTER_NAME=${{ steps.terraform-outputs.outputs.cluster_name }}
           TASK_ID=${{ steps.run-task.outputs.task_id }}
@@ -256,30 +257,84 @@ jobs:
           echo ""
           echo "Pobieranie logów z grupy: $LOG_GROUP"
           
-          aws logs filter-log-events \
-            --log-group-name "$LOG_GROUP" \
-            --start-time $(($(date +%s) * 1000 - 300000)) \
-            --filter-pattern "" \
-            --max-events 100 \
-            --query 'events[*].[message]' \
-            --output text 2>/dev/null > /tmp/bastion_logs.txt || true
+          # Czekaj aż logi się pojawią w CloudWatch (z retry)
+          for i in {1..10}; do
+            aws logs filter-log-events \
+              --log-group-name "$LOG_GROUP" \
+              --start-time $(($(date +%s) * 1000 - 300000)) \
+              --filter-pattern "" \
+              --max-events 100 \
+              --query 'events[*].[message]' \
+              --output text 2>/dev/null > /tmp/bastion_logs.txt || true
+            
+            # Sprawdź czy logi mają zawartość
+            if [ -s /tmp/bastion_logs.txt ]; then
+              echo "✓ Logi pobrane ($i. próba)"
+              break
+            fi
+            
+            if [ $i -lt 10 ]; then
+              echo "Czekanie na logi ($i/10)..."
+              sleep 1
+            fi
+          done
           
           echo "=== Logi z CloudWatch ==="
           cat /tmp/bastion_logs.txt || echo "Brak logów (task się nie uruchomił)"
-
-      - name: Wyświetlenie URL Serveo.net w GitHub Summary
-        if: github.event.inputs.action == 'START'
-        run: |
-          SERVEO_SUBDOMAIN=${{ steps.terraform-outputs.outputs.serveo_subdomain }}
           
-          echo "## 🔗 Bastion URL" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Połącz się z bastionem używając:" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          echo "ssh -p 80 ${SERVEO_SUBDOMAIN}.serveo.net" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "⚠️ **Uwaga:** URL jest ważny tylko dopóki task jest uruchomiony." >> $GITHUB_STEP_SUMMARY
+          # Wyciągnij subdomenę z logów
+          ACTUAL_SUBDOMAIN=$(grep -oP "Subdomena: \K[^\s]+" /tmp/bastion_logs.txt | head -1 || echo "")
+          
+          if [ -z "$ACTUAL_SUBDOMAIN" ]; then
+            echo "WARNING: Nie znaleziono subdomeny w logach, używam z Terraform output"
+            ACTUAL_SUBDOMAIN="${{ steps.terraform-outputs.outputs.serveo_subdomain }}"
+          fi
+          
+          echo "actual_subdomain=$ACTUAL_SUBDOMAIN" >> $GITHUB_OUTPUT
+
+       - name: Wyświetlenie podsumowania połączenia
+        if: github.event.inputs.action == 'START' && success()
+        run: |
+          ACTUAL_SUBDOMAIN=${{ steps.wait-and-logs.outputs.actual_subdomain }}
+          
+          cat >> $GITHUB_STEP_SUMMARY << 'EOF'
+          ╔════════════════════════════════════════════════════════╗
+          ║               🚀 BASTION GOTOWY!                       ║
+          ╚════════════════════════════════════════════════════════╝
+          
+          **📍 DANE DO POŁĄCZENIA:**
+          
+          Host: `$ACTUAL_SUBDOMAIN.serveo.net`
+          Port: `80`
+          User: `root`
+          
+          **🔗 POLECENIE SSH:**
+          
+          \`\`\`bash
+          ssh -p 80 $ACTUAL_SUBDOMAIN.serveo.net
+          \`\`\`
+          
+          ---
+          
+          ⏱️ **WAŻNE INFORMACJE:**
+          - ✅ Task uruchomiony i stabilny
+          - 🔒 Port 80 → Serveo.net → SSH (port 22)
+          - ⏰ Bastion będzie aktywny przez 1 godzinę
+          - 🛑 Aby zatrzymać: uruchom workflow z akcją STOP
+          
+          **Troubleshooting:**
+          - Timeout? → Check VPC security group (port 443 dla ECR)
+          - Connection refused? → Task może się zatrzymać → check CloudWatch logs
+          - "Permission denied"? → Check SSH key w kontenerze
+          
+          ---
+          
+          EOF
+
+       - name: Wyświetlenie URL Serveo.net w GitHub Summary
+        if: github.event.inputs.action == 'START' && false
+        run: |
+          echo "Step disabled - use new summary above"
 
       - name: Stop running ECS Task (STOP)
         if: github.event.inputs.action == 'STOP'
