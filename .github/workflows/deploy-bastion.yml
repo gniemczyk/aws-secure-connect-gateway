@@ -114,10 +114,12 @@ jobs:
 
       - name: Skanowanie obrazu na podatności (Trivy)
         if: github.event.inputs.action == 'START'
-        run: |
-          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin v0.51.0
-          echo "Skanowanie obrazu na podatności..."
-          /usr/local/bin/trivy image --exit-code 0 --severity HIGH,CRITICAL --no-progress bastion
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: bastion
+          format: sarif
+          output: trivy-results.sarif
+          severity: HIGH,CRITICAL
 
       - name: Push Docker image do Amazon ECR
         if: github.event.inputs.action == 'START'
