@@ -165,6 +165,7 @@ jobs:
           SG_ID=$(terraform output -raw security_group_id)
           LOG_GROUP=$(terraform output -raw log_group_name)
           SERVEO_SUBDOMAIN=$(terraform output -raw serveo_subdomain)
+          SERVICE_NAME=$(terraform output -raw service_name)
           
           echo "cluster_name=$CLUSTER_NAME" >> $GITHUB_OUTPUT
           echo "cluster_arn=$CLUSTER_ARN" >> $GITHUB_OUTPUT
@@ -173,6 +174,7 @@ jobs:
           echo "sg_id=$SG_ID" >> $GITHUB_OUTPUT
           echo "log_group=$LOG_GROUP" >> $GITHUB_OUTPUT
           echo "serveo_subdomain=$SERVEO_SUBDOMAIN" >> $GITHUB_OUTPUT
+          echo "service_name=$SERVICE_NAME" >> $GITHUB_OUTPUT
 
       - name: Trigger ECS Service Redeploy (restart with new image)
         if: github.event.inputs.action == 'START'
