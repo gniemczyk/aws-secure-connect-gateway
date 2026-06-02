@@ -19,6 +19,8 @@ on:
 env:
   AWS_REGION: 'eu-central-1'
   TERRAFORM_VERSION: '1.5.7'
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}/bastion
 
 jobs:
   deploy:
@@ -27,7 +29,7 @@ jobs:
     permissions:
       id-token: write
       contents: read
-      pull-requests: write
+      packages: write
 
     steps:
       - name: Checkout repozytorium
@@ -44,42 +46,33 @@ jobs:
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
 
-      - name: Logowanie do Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
+      - name: Logowanie do GitHub Container Registry
+        if: github.event.inputs.action == 'START'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Budowanie obrazu Docker (tylko dla START)
+      - name: Build Docker image (START)
         if: github.event.inputs.action == 'START'
         run: |
-          # Zbuduj obraz
           docker build -t bastion .
-          
-          # Tagowanie dla ECR
-          IMAGE_URI=${{ steps.login-ecr.outputs.registry }}/bastion:${{ github.sha }}
-          docker tag bastion $IMAGE_URI
-          
-          # Zapisz URI jako output
-          echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_OUTPUT
 
       - name: Skanowanie obrazu na podatności (Trivy)
         if: github.event.inputs.action == 'START'
         run: |
-          # Instalacja Trivy
           curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
-          
-          # Skanowanie obrazu - pokaż HIGH i CRITICAL CVE
           echo "Skanowanie obrazu na podatności..."
           /usr/local/bin/trivy image --exit-code 0 --severity HIGH,CRITICAL --no-progress bastion
-          
-          # Dla produkcji odkomentuj poniżej (exit-code 1 spowoduje błąd workflow):
-          # /usr/local/bin/trivy image --exit-code 1 --severity HIGH,CRITICAL --no-progress bastion
 
-      - name: Push obrazu do Amazon ECR
+      - name: Push Docker image do GHCR (START)
         if: github.event.inputs.action == 'START'
         run: |
-          IMAGE_URI=${{ steps.login-ecr.outputs.registry }}/bastion:${{ github.sha }}
-          docker push $IMAGE_URI
-          echo "Obraz $IMAGE_URI został wysłany do ECR"
+          IMAGE_TAG=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          docker tag bastion $IMAGE_TAG
+          docker push $IMAGE_TAG
+          echo "IMAGE_URI=$IMAGE_TAG" >> $GITHUB_ENV
 
       - name: Terraform Init
         working-directory: ./terraform
@@ -93,7 +86,7 @@ jobs:
             -out=tfplan \
             -var="vpc_id=${{ vars.VPC_ID }}" \
             -var="region=${{ env.AWS_REGION }}" \
-            -var="container_image=${{ steps.login-ecr.outputs.registry }}/bastion:${{ github.sha }}" \
+            -var="container_image=${{ env.IMAGE_URI }}" \
             -var="serveo_subdomain=${{ github.event.inputs.serveo_subdomain }}"
           terraform apply tfplan
 
@@ -123,7 +116,6 @@ jobs:
           echo "Cluster: $CLUSTER_NAME"
           echo "Task ID: $TASK_ID"
           
-          # Czekaj max 120 sekund na start tasku
           MAX_ATTEMPTS=60
           ATTEMPT=0
           TASK_RUNNING=false
@@ -131,7 +123,6 @@ jobs:
           while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
             ATTEMPT=$((ATTEMPT + 1))
             
-            # Pobierz status tasku
             STATUS=$(aws ecs describe-tasks \
               --cluster "$CLUSTER_NAME" \
               --tasks "$TASK_ID" \
@@ -143,7 +134,7 @@ jobs:
             if [ "$STATUS" = "RUNNING" ]; then
               echo "✓ Task uruchomiony pomyślnie!"
               TASK_RUNNING=true
-              sleep 5  # Dodaj buffer na inicjalizację tunelu
+              sleep 5
               break
             fi
             
@@ -163,7 +154,6 @@ jobs:
           echo ""
           echo "Pobieranie logów z grupy: $LOG_GROUP"
           
-          # Pobierz ostatnie logi używając filter-log-events
           aws logs filter-log-events \
             --log-group-name "$LOG_GROUP" \
             --start-time $(($(date +%s) * 1000 - 300000)) \
@@ -179,7 +169,6 @@ jobs:
         if: github.event.inputs.action == 'START'
         run: |
           SERVEO_SUBDOMAIN=${{ steps.terraform-outputs.outputs.serveo_subdomain }}
-          SERVEO_URL="https://${SERVEO_SUBDOMAIN}.serveo.net"
           
           echo "## 🔗 Bastion URL" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -187,8 +176,6 @@ jobs:
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
           echo "ssh -p 80 ${SERVEO_SUBDOMAIN}.serveo.net" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**URL tunelu:** $SERVEO_URL" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "⚠️ **Uwaga:** URL jest ważny tylko dopóki task jest uruchomiony." >> $GITHUB_STEP_SUMMARY
 
@@ -213,3 +200,4 @@ jobs:
           echo "- Tymczasowa podsieć usunięta" >> $GITHUB_STEP_SUMMARY
           echo "- Security Group usunięta" >> $GITHUB_STEP_SUMMARY
           echo "- ECS Cluster usunięty" >> $GITHUB_STEP_SUMMARY
+

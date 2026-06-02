@@ -27,133 +27,58 @@ Bezpieczny, efemeryczny bastion SSH oparty na AWS ECS Fargate z autoryzacją Git
 - **Public IP**: Tylko dla połączenia z Serveo.net
 - **Ograniczony ruch**: Brak możliwości danych exfiltration
 
-## Wymagania Wstępne
+## Wymagania Wstępne - QUICK START
 
-### GitHub Variables
-Ustaw w repozytorium GitHub (Settings → Secrets and variables → Actions → Variables):
-- `VPC_ID`: ID istniejącego VPC w trybie Dual-Stack
-
-### GitHub Secrets
+### 1. GitHub Secrets - 1 minute setup
 Ustaw w repozytorium GitHub (Settings → Secrets and variables → Actions → Secrets):
-- `AWS_ROLE_ARN`: ARN roli IAM dla OIDC (np. `arn:aws:iam::123456789012:role/github-actions-role`)
+- `AWS_ROLE_ARN`: Twoja rola IAM ARN (np. `arn:aws:iam::837175765719:role/github-actions-role`)
 
-### Konfiguracja OIDC w AWS
+### 2. GitHub Variables - 1 minute setup  
+Ustaw w repozytorium GitHub (Settings → Secrets and variables → Actions → Variables):
+- `VPC_ID`: Twój VPC ID (np. `vpc-12345678`)
+
+### 3. AWS Configuration
+
+Skonfiguruj OIDC w AWS (one-time setup):
 
 1. **Utwórz Identity Provider w AWS IAM Console**:
-   - Provider type: OpenID Connect
-   - Provider URL: `https://token.actions.githubusercontent.com`
-   - Audience: `sts.amazonaws.com`
+   ```
+   Provider type: OpenID Connect
+   Provider URL: https://token.actions.githubusercontent.com
+   Audience: sts.amazonaws.com
+   ```
 
-2. **Utwórz Rolę IAM** (Least Privilege - branch-restricted):
+2. **Utwórz Rolę IAM z trust policy** (dostosuj do swoich gałęzi):
    ```json
    {
      "Version": "2012-10-17",
-     "Statement": [
-       {
-         "Effect": "Allow",
-         "Principal": {
-           "Federated": "arn:aws:iam::ACCOUNT_ID:oidc-provider/token.actions.githubusercontent.com"
-         },
-         "Action": "sts:AssumeRoleWithWebIdentity",
-         "Condition": {
-           "StringLike": {
-             "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
-             "token.actions.githubusercontent.com:sub": [
-               "repo:YOUR_ORG/YOUR_REPO:ref:refs/heads/main",
-               "repo:YOUR_ORG/YOUR_REPO:ref:refs/heads/develop",
-               "repo:YOUR_ORG/YOUR_REPO:ref:refs/heads/test"
-             ]
-           }
+     "Statement": [{
+       "Effect": "Allow",
+       "Principal": {
+         "Federated": "arn:aws:iam::837175765719:oidc-provider/token.actions.githubusercontent.com"
+       },
+       "Action": "sts:AssumeRoleWithWebIdentity",
+       "Condition": {
+         "StringLike": {
+           "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+           "token.actions.githubusercontent.com:sub": [
+             "repo:gniemczyk/*:ref:refs/heads/main",
+             "repo:gniemczyk/*:ref:refs/heads/develop"
+           ]
          }
        }
-     ]
-   }
-   ```
-   
-   **Uwaga:** Ta polityka ogranicza dostęp tylko do wybranych gałęzi (main, develop, test).
-   Dla bardziej permisywnego dostępu ze wszystkich gałęzi, zastosuj:
-   ```json
-   "Condition": {
-     "StringLike": {
-       "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
-       "token.actions.githubusercontent.com:sub": "repo:YOUR_ORG/YOUR_REPO:*"
-     }
+     }]
    }
    ```
 
-3. **Dodaj uprawnienia do roli**:
-   - AdministratorAccess (lub ograniczone do ECS, VPC, ECR, CloudWatch)
+3. **Przypisz uprawnienia do roli**:
+   - `AmazonECS_FullAccess`
+   - `AmazonVPCFullAccess`
+   - `CloudWatchLogsFullAccess`
+   
+   Lub dla maksymalnej elastyczności: `AdministratorAccess`
 
 4. **Skopiuj ARN roli** i ustaw jako `AWS_ROLE_ARN` w GitHub Secrets
-
-### Amazon ECR Repository - Opcje Konfiguracji
-
-**Opcja 1: Minimalna (Rekomendowana dla ephemerycznych deploymentów) ✅**
-
-Nie twórz prywatnego ECR. Zamiast tego:
-- GitHub Actions builduje image na locie
-- Pushuje do publicznego ECR (AWS managed images)
-- Image się nie przechowuje (maksymalnie cache GitHub Actions)
-- Brak kosztów przechowywania
-- Szybkie deployuję
-
-Konfiguracja: Zmień `container_image` w GitHub Actions na:
-```bash
-# Public AWS ECR (Alpine + openssh-client)
-public.ecr.aws/alpine:latest
-```
-
----
-
-**Opcja 2: Prywatne ECR z retencją (Jeśli chcesz cache'ować)**
-
-Utwórz prywatne repozytorium ECR:
-```bash
-aws ecr create-repository \
-  --repository-name bastion \
-  --region eu-central-1 \
-  --encryption-configuration encryptionType=AES
-```
-
-**Ustaw lifecycle policy (auto-cleanup po 1 dniu):**
-```json
-{
-  "rules": [
-    {
-      "rulePriority": 1,
-      "description": "Usuń image'y starsze niż 1 dzień",
-      "selection": {
-        "tagStatus": "any",
-        "countType": "sinceImagePushed",
-        "countUnit": "days",
-        "countNumber": 1
-      },
-      "action": {
-        "type": "expire"
-      }
-    }
-  ]
-}
-```
-
-Zastosuj policy:
-```bash
-aws ecr put-lifecycle-policy \
-  --repository-name bastion \
-  --lifecycle-policy-text file://lifecycle-policy.json
-```
-
----
-
-**Opcja 3: Hybrid (Optymalna dla produkcji) ✨**
-
-- Builduj image w Fargate (nie w GitHub Actions)
-- Nie przechowuj w ECR
-- Każdy deployment = fresh build
-- Brak kosztów przechowywania
-- Maksymalna bezpieczność (no stale images)
-
-Ta opcja wymaga modyfikacji workflow (będzie dostępna w przyszłości)
 
 ## Użycie
 
@@ -205,21 +130,20 @@ ssh -p 80 ephemeral-bastion-abc123.serveo.net
 └── README.md                     # Ten plik
 ```
 
-## Zasoby Tworzone przez Terraform
+### Zasoby Tworzone przez Terraform
 
-### START
+Gdy uruchomisz workflow **START**:
 - Tymczasowa podsieć w VPC
-- Security Group (zablokowany inbound, tylko SSH + DNS outbound)
+- Security Group (zablokowany inbound, SSH + DNS outbound)
 - ECS Cluster
-- ECS Task Definition (z readonlyRootFilesystem)
-- ECS Fargate Task
+- ECS Task Definition
+- ECS Fargate Task (z Twoim image'em)
 - CloudWatch Log Group (1-dniowa retencja)
 - IAM Role dla execution task
 
-### STOP
+Gdy uruchomisz workflow **STOP**:
 - Wszystkie powyższe zasoby są usuwane
-- VPC pozostaje nienaruszone
-- ECR image (jeśli był) pozostaje (użyj lifecycle policy do auto-cleanup)
+- VPC pozostaje nienaruszone (będzie można go ponownie użyć)
 
 ## Troubleshooting
 
@@ -230,9 +154,9 @@ ssh -p 80 ephemeral-bastion-abc123.serveo.net
 - Sprawdź CloudWatch Logs pod kątem błędów
 
 ### Błąd: "Unable to pull image"
-- Jeśli używasz private ECR: sprawdź uprawnienia IAM dla ECS Task
-- Jeśli używasz public ECR: sprawdź dostęp do internetu z Fargate
-- Sprawdź czy image tag istnieje w repozytorium
+- Sprawdź czy image jest dostępny w GitHub Container Registry
+- Workflow automatycznie pushuje image - sprawdź GitHub Actions logs
+- Jeśli używasz prywatnego ECR: sprawdź IAM permissions dla ECS Task Role
 
 ### Serveo.net nie działa
 - Sprawdź czy podsieć ma public IP
@@ -246,9 +170,8 @@ ssh -p 80 ephemeral-bastion-abc123.serveo.net
 - Sprawdź czy zmienne Terraform przeszły walidację
 
 ### Koszty ECR są za wysokie
-- Użyj Opcji 1 (public ECR, nie przechowuj image'ów)
-- Lub ustaw lifecycle policy do auto-cleanup na Opcji 2
-- Lub wdrażaj Opcję 3 (hybrid model)
+- Workflow używa GitHub Container Registry (GHCR) - bezpłatny!
+- Jeśli chcesz zmienić na AWS ECR: zmień workflow i ustaw lifecycle policy do auto-cleanup
 
 ## Licencja
 
