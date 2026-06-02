@@ -6,6 +6,11 @@ provider "aws" {
 
 # --- NETWORKING ---
 
+# Get existing VPC
+data "aws_vpc" "selected" {
+  id = var.vpc_id
+}
+
 # Try to find existing ephemeral-bastion subnet (from previous run)
 data "aws_subnets" "existing_bastion" {
   filter {
