@@ -127,13 +127,9 @@ jobs:
           REGISTRY=${{ steps.login-ecr.outputs.registry }}
           IMAGE_REPO=$REGISTRY/${{ env.ECR_REPOSITORY }}
           
-          # Push z tagiem 'latest' (overwrite zawsze ten sam tag)
+          # Push TYLKO 'latest' tag - overwrite zawsze ten sam obraz
           docker tag bastion $IMAGE_REPO:latest
           docker push $IMAGE_REPO:latest
-          
-          # Opcjonalnie: push z commit SHA dla historii (ale lifecycle policy usunie stare)
-          docker tag bastion $IMAGE_REPO:${{ github.sha }}
-          docker push $IMAGE_REPO:${{ github.sha }}
           
           echo "IMAGE_URI=$IMAGE_REPO:latest" >> $GITHUB_ENV
 
