@@ -36,8 +36,8 @@ output "subnet_cidr" {
 }
 
 output "security_group_id" {
-  description = "Security Group ID"
-  value       = aws_security_group.bastion_sg.id
+  description = "Security Group ID (reused if exists, or newly created)"
+  value       = local.bastion_sg_id
 }
 
 output "log_group_name" {

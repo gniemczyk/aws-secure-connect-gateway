@@ -104,10 +104,29 @@ locals {
   bastion_subnet_id = length(data.aws_subnets.existing_bastion.ids) > 0 ? data.aws_subnets.existing_bastion.ids[0] : aws_subnet.bastion_subnet[0].id
 }
 
-# Security Group - inbound blocked, outbound SSH + DNS only
+# Try to find existing ephemeral-bastion security group (from previous run)
+data "aws_security_groups" "existing_bastion_sg" {
+  filter {
+    name   = "vpc-id"
+    values = [var.vpc_id]
+  }
+  filter {
+    name   = "tag:Environment"
+    values = ["ephemeral"]
+  }
+  filter {
+    name   = "tag:Name"
+    values = ["${var.bastion_name}-sg"]
+  }
+}
+
+# Security Group - inbound blocked, outbound SSH + DNS + HTTPS only
+# Create only if doesn't already exist
 resource "aws_security_group" "bastion_sg" {
-  name_prefix = "${var.bastion_name}-sg-"
-  description = "Security Group for ephemeral bastion - blocked inbound, SSH+DNS outbound"
+  # Skip creation if existing bastion SG found
+  count       = length(data.aws_security_groups.existing_bastion_sg.ids) > 0 ? 0 : 1
+  name        = "${var.bastion_name}-sg"
+  description = "Security Group for ephemeral bastion - blocked inbound, SSH+DNS+HTTPS outbound"
   vpc_id      = var.vpc_id
 
   # Outbound SSH (port 22) for Serveo.net tunnel
@@ -141,8 +160,13 @@ resource "aws_security_group" "bastion_sg" {
   }
 
   lifecycle {
-    create_before_destroy = true
+    ignore_changes = [tags]
   }
+}
+
+# Use existing bastion SG if found, or newly created one
+locals {
+  bastion_sg_id = length(data.aws_security_groups.existing_bastion_sg.ids) > 0 ? data.aws_security_groups.existing_bastion_sg.ids[0] : aws_security_group.bastion_sg[0].id
 }
 
 # --- ECS ---
