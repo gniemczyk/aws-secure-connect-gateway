@@ -56,7 +56,6 @@ locals {
   # Use first available, or fallback to first possible (shouldn't happen)
   new_subnet_cidr = length(local.available_cidrs) > 0 ? local.available_cidrs[0] : local.all_possible_cidrs[0]
 }
-}
 
 # Create temporary subnet for bastion
 resource "aws_subnet" "bastion_subnet" {
