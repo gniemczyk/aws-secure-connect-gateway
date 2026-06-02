@@ -257,24 +257,35 @@ jobs:
           echo ""
           echo "Pobieranie logów z grupy: $LOG_GROUP"
           
-          # Czekaj aż logi się pojawią w CloudWatch (z retry)
-          for i in {1..10}; do
-            aws logs filter-log-events \
+          # Czekaj aż log stream się pojawi i będzie mieć logi (z retry do 30 sekund)
+          ACTUAL_LOG_STREAM=""
+          for i in {1..30}; do
+            # Znajdź najnowszy log stream dla tego tasku
+            ACTUAL_LOG_STREAM=$(aws logs describe-log-streams \
               --log-group-name "$LOG_GROUP" \
-              --start-time $(($(date +%s) * 1000 - 300000)) \
-              --filter-pattern "" \
-              --max-events 100 \
-              --query 'events[*].[message]' \
-              --output text 2>/dev/null > /tmp/bastion_logs.txt || true
+              --order-by LastEventTime \
+              --descending \
+              --max-items 1 \
+              --query 'logStreams[0].logStreamName' \
+              --output text 2>/dev/null || echo "")
             
-            # Sprawdź czy logi mają zawartość
-            if [ -s /tmp/bastion_logs.txt ]; then
-              echo "✓ Logi pobrane ($i. próba)"
-              break
+            if [ -n "$ACTUAL_LOG_STREAM" ] && [ "$ACTUAL_LOG_STREAM" != "None" ]; then
+              # Pobierz logi z tego streamu
+              aws logs get-log-events \
+                --log-group-name "$LOG_GROUP" \
+                --log-stream-name "$ACTUAL_LOG_STREAM" \
+                --query 'events[*].[message]' \
+                --output text 2>/dev/null > /tmp/bastion_logs.txt || true
+              
+              # Sprawdź czy logi mają zawartość
+              if [ -s /tmp/bastion_logs.txt ]; then
+                echo "✓ Logi pobrane ($i. próba)"
+                break
+              fi
             fi
             
-            if [ $i -lt 10 ]; then
-              echo "Czekanie na logi ($i/10)..."
+            if [ $i -lt 30 ]; then
+              echo "Czekanie na logi ($i/30)..."
               sleep 1
             fi
           done
