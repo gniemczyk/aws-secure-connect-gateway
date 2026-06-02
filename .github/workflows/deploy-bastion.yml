@@ -174,6 +174,35 @@ jobs:
           echo "log_group=$LOG_GROUP" >> $GITHUB_OUTPUT
           echo "serveo_subdomain=$SERVEO_SUBDOMAIN" >> $GITHUB_OUTPUT
 
+      - name: Stop any existing ECS Tasks (cleanup before START)
+        if: github.event.inputs.action == 'START'
+        run: |
+          echo "Zatrzymywanie starych tasków (jeśli istnieją)..."
+          
+          CLUSTER_NAME=${{ steps.terraform-outputs.outputs.cluster_name }}
+          REGION=${{ env.AWS_REGION }}
+          
+          # Pobierz wszystkie uruchomione taski
+          RUNNING_TASKS=$(aws ecs list-tasks \
+            --cluster "$CLUSTER_NAME" \
+            --desired-status RUNNING \
+            --region "$REGION" \
+            --query 'taskArns[]' \
+            --output text 2>/dev/null || echo "")
+          
+          if [ -z "$RUNNING_TASKS" ]; then
+            echo "Brak uruchomionych tasków"
+          else
+            echo "Zatrzymywanie: $RUNNING_TASKS"
+            for TASK_ARN in $RUNNING_TASKS; do
+              aws ecs stop-task \
+                --cluster "$CLUSTER_NAME" \
+                --task "$TASK_ARN" \
+                --region "$REGION" 2>/dev/null || true
+            done
+            echo "✓ Stare taski zatrzymane"
+          fi
+
       - name: Run ECS Task (START)
         if: github.event.inputs.action == 'START'
         id: run-task
