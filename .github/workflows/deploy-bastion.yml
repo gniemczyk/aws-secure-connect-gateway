@@ -345,53 +345,36 @@ jobs:
           echo ""
           echo "Pobieranie logów z grupy: $LOG_GROUP"
           
-          # Czytaj logi dopóki nie pojawi się subdomena (bez fixed timeout)
-          ACTUAL_SUBDOMAIN=""
-          MAX_WAIT=120  # max 120 sekund na wypadek błędu
-          ELAPSED=0
+          # Wait dla logów (5 sekund na pojawienie się)
+          sleep 5
           
-          while [ -z "$ACTUAL_SUBDOMAIN" ] && [ $ELAPSED -lt $MAX_WAIT ]; do
-            # Znajdź najnowszy log stream
-            ACTUAL_LOG_STREAM=$(aws logs describe-log-streams \
+          # Pobierz logi z najnowszego log stream
+          ACTUAL_LOG_STREAM=$(aws logs describe-log-streams \
+            --log-group-name "$LOG_GROUP" \
+            --order-by LastEventTime \
+            --descending \
+            --max-items 1 \
+            --query 'logStreams[0].logStreamName' \
+            --output text 2>/dev/null || echo "")
+          
+          if [ -n "$ACTUAL_LOG_STREAM" ] && [ "$ACTUAL_LOG_STREAM" != "None" ]; then
+            aws logs get-log-events \
               --log-group-name "$LOG_GROUP" \
-              --order-by LastEventTime \
-              --descending \
-              --max-items 1 \
-              --query 'logStreams[0].logStreamName' \
-              --output text 2>/dev/null || echo "")
-            
-            if [ -n "$ACTUAL_LOG_STREAM" ] && [ "$ACTUAL_LOG_STREAM" != "None" ]; then
-              # Pobierz logi z tego streamu
-              LOGS=$(aws logs get-log-events \
-                --log-group-name "$LOG_GROUP" \
-                --log-stream-name "$ACTUAL_LOG_STREAM" \
-                --query 'events[*].[message]' \
-                --output text 2>/dev/null)
-              
-              # Wyciągnij subdomenę jeśli jest
-              if [ -n "$LOGS" ]; then
-                echo "$LOGS" > /tmp/bastion_logs.txt
-                ACTUAL_SUBDOMAIN=$(echo "$LOGS" | grep -oP "Subdomena: \K[^\s]+" | head -1 || echo "")
-                
-                if [ -n "$ACTUAL_SUBDOMAIN" ]; then
-                  echo "✓ Subdomena znaleziona: $ACTUAL_SUBDOMAIN"
-                  break
-                fi
-              fi
-            fi
-            
-            # Czekaj 0.5 sekundy i próbuj jeszcze raz
-            sleep 0.5
-            ELAPSED=$((ELAPSED + 1))
-            echo -n "."  # Progress indicator
-          done
+              --log-stream-name "$ACTUAL_LOG_STREAM" \
+              --query 'events[*].[message]' \
+              --output text > /tmp/bastion_logs.txt 2>/dev/null || echo "Brak logów" > /tmp/bastion_logs.txt
+          else
+            echo "Log stream not found" > /tmp/bastion_logs.txt
+          fi
           
-          echo ""
           echo "=== Logi z CloudWatch ==="
-          cat /tmp/bastion_logs.txt 2>/dev/null || echo "Brak logów"
+          cat /tmp/bastion_logs.txt
+          
+          # Wyciągnij subdomenę z logów
+          ACTUAL_SUBDOMAIN=$(grep -oP "Subdomena: \K[^\s]+" /tmp/bastion_logs.txt | head -1 || echo "")
           
           if [ -z "$ACTUAL_SUBDOMAIN" ]; then
-            echo "WARNING: Nie znaleziono subdomeny w logach po ${ELAPSED}s, używam z Terraform output"
+            echo "WARNING: Nie znaleziono subdomeny w logach, używam z Terraform output"
             ACTUAL_SUBDOMAIN="${{ steps.terraform-outputs.outputs.serveo_subdomain }}"
           fi
           
