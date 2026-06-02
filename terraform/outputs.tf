@@ -26,13 +26,13 @@ output "task_definition_arn" {
 }
 
 output "subnet_id" {
-  description = "Subnet ID"
-  value       = aws_subnet.bastion_subnet.id
+  description = "Subnet ID (reused if exists, or newly created)"
+  value       = local.bastion_subnet_id
 }
 
 output "subnet_cidr" {
-  description = "Subnet CIDR block (automatically selected from available range)"
-  value       = aws_subnet.bastion_subnet.cidr_block
+  description = "Subnet CIDR block (reused if exists, or auto-allocated)"
+  value       = length(data.aws_subnets.existing_bastion.ids) > 0 ? data.aws_subnet.existing_bastion[0].cidr_block : aws_subnet.bastion_subnet[0].cidr_block
 }
 
 output "security_group_id" {

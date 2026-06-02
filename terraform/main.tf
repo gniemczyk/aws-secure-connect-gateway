@@ -6,9 +6,26 @@ provider "aws" {
 
 # --- NETWORKING ---
 
-# Get existing VPC
-data "aws_vpc" "selected" {
-  id = var.vpc_id
+# Try to find existing ephemeral-bastion subnet (from previous run)
+data "aws_subnets" "existing_bastion" {
+  filter {
+    name   = "vpc-id"
+    values = [var.vpc_id]
+  }
+  filter {
+    name   = "tag:Environment"
+    values = ["ephemeral"]
+  }
+  filter {
+    name   = "tag:Name"
+    values = ["${var.bastion_name}-subnet"]
+  }
+}
+
+# Get details of existing bastion subnet if found
+data "aws_subnet" "existing_bastion" {
+  count  = length(data.aws_subnets.existing_bastion.ids) > 0 ? 1 : 0
+  id     = data.aws_subnets.existing_bastion.ids[0]
 }
 
 # Get ALL existing subnets in VPC (to detect used CIDRs)
@@ -57,8 +74,10 @@ locals {
   new_subnet_cidr = length(local.available_cidrs) > 0 ? local.available_cidrs[0] : local.all_possible_cidrs[0]
 }
 
-# Create temporary subnet for bastion
+# Create temporary subnet for bastion (only if doesn't already exist)
 resource "aws_subnet" "bastion_subnet" {
+  # Skip creation if existing bastion subnet found
+  count                   = length(data.aws_subnets.existing_bastion.ids) > 0 ? 0 : 1
   vpc_id                  = var.vpc_id
   cidr_block              = local.new_subnet_cidr
   availability_zone       = data.aws_availability_zones.available.names[0]
@@ -72,8 +91,12 @@ resource "aws_subnet" "bastion_subnet" {
 
   lifecycle {
     ignore_changes = [tags]
-    create_before_destroy = true
   }
+}
+
+# Use existing bastion subnet if found, or newly created one
+locals {
+  bastion_subnet_id = length(data.aws_subnets.existing_bastion.ids) > 0 ? data.aws_subnets.existing_bastion.ids[0] : aws_subnet.bastion_subnet[0].id
 }
 
 # Security Group - inbound blocked, outbound SSH + DNS only
