@@ -98,6 +98,14 @@ resource "aws_security_group" "bastion_sg" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
+  # Outbound HTTPS (port 443) for ECR authentication and image pull
+  egress {
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
   tags = {
     Name        = "${var.bastion_name}-sg"
     Environment = "ephemeral"
