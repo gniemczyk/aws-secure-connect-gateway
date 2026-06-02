@@ -32,7 +32,7 @@ output "security_group_id" {
 
 output "log_group_name" {
   description = "CloudWatch Log Group name"
-  value       = aws_cloudwatch_log_group.bastion_logs.name
+  value       = local.log_group_name
 }
 
 output "serveo_subdomain" {

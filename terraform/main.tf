@@ -119,8 +119,15 @@ resource "aws_ecs_cluster" "bastion_cluster" {
   }
 }
 
-# CloudWatch Log Group
+# Try to get existing CloudWatch Log Group (if it exists from previous run)
+data "aws_cloudwatch_log_group" "existing" {
+  name = "/ecs/${var.bastion_name}"
+}
+
+# Create log group only if it doesn't already exist
 resource "aws_cloudwatch_log_group" "bastion_logs" {
+  # Skip creation if log group already exists
+  count             = try(data.aws_cloudwatch_log_group.existing.arn, null) != null ? 0 : 1
   name              = "/ecs/${var.bastion_name}"
   retention_in_days = 1
   skip_destroy      = true
@@ -129,6 +136,12 @@ resource "aws_cloudwatch_log_group" "bastion_logs" {
     Environment = "ephemeral"
     ManagedBy   = "terraform"
   }
+}
+
+# Use existing or newly created log group
+locals {
+  log_group_arn  = try(data.aws_cloudwatch_log_group.existing.arn, aws_cloudwatch_log_group.bastion_logs[0].arn)
+  log_group_name = try(data.aws_cloudwatch_log_group.existing.name, aws_cloudwatch_log_group.bastion_logs[0].name)
 }
 
 # IAM Role for ECS Task Execution
@@ -207,7 +220,7 @@ resource "aws_ecs_task_definition" "bastion_task" {
       logConfiguration = {
         logDriver = "awslogs"
         options = {
-          "awslogs-group"         = aws_cloudwatch_log_group.bastion_logs.name
+          "awslogs-group"         = local.log_group_name
           "awslogs-region"        = var.region
           "awslogs-stream-prefix" = "bastion"
         }
