@@ -192,12 +192,13 @@ jobs:
           while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
             ATTEMPT=$((ATTEMPT + 1))
             
-            STATUS=$(aws ecs describe-tasks \
+            TASK_INFO=$(aws ecs describe-tasks \
               --cluster "$CLUSTER_NAME" \
               --tasks "$TASK_ID" \
               --region ${{ env.AWS_REGION }} \
-              --query 'tasks[0].lastStatus' \
-              --output text 2>/dev/null || echo "ERROR")
+              --query 'tasks[0]' 2>/dev/null)
+            
+            STATUS=$(echo "$TASK_INFO" | jq -r '.lastStatus // "UNKNOWN"')
             
             echo "[$ATTEMPT/$MAX_ATTEMPTS] Task status: $STATUS"
             
@@ -210,6 +211,12 @@ jobs:
             
             if [ "$STATUS" = "STOPPED" ] || [ "$STATUS" = "STOPPING" ]; then
               echo "✗ Task się nie uruchomił! Status: $STATUS"
+              echo ""
+              echo "=== Task Details (błędy) ==="
+              echo "$TASK_INFO" | jq '.'
+              echo ""
+              echo "=== Stop Code ==="
+              echo "$TASK_INFO" | jq '.stoppedReason // "Brak informacji"'
               break
             fi
             
@@ -217,7 +224,15 @@ jobs:
           done
           
           if [ "$TASK_RUNNING" = "false" ]; then
+            echo ""
             echo "ERROR: Task nie uruchomił się w ciągu 120 sekund!"
+            echo ""
+            echo "=== Ostatni task status ==="
+            aws ecs describe-tasks \
+              --cluster "$CLUSTER_NAME" \
+              --tasks "$TASK_ID" \
+              --region ${{ env.AWS_REGION }} | jq '.tasks[0] | {lastStatus, stoppedCode, stoppedReason, containerInstanceArn}'
+            
             exit 1
           fi
           
@@ -233,7 +248,7 @@ jobs:
             --output text 2>/dev/null > /tmp/bastion_logs.txt || true
           
           echo "=== Logi z CloudWatch ==="
-          cat /tmp/bastion_logs.txt || echo "Brak logów"
+          cat /tmp/bastion_logs.txt || echo "Brak logów (task się nie uruchomił)"
 
       - name: Wyświetlenie URL Serveo.net w GitHub Summary
         if: github.event.inputs.action == 'START'
