@@ -137,6 +137,21 @@ jobs:
         working-directory: ./terraform
         run: terraform init
 
+      - name: Import existing ECS Service (if exists) into Terraform state
+        if: github.event.inputs.action == 'START'
+        working-directory: ./terraform
+        run: |
+          CLUSTER_NAME="ephemeral-bastion-cluster"
+          SERVICE_NAME="ephemeral-bastion-service"
+          
+          # Try to import existing service - if it exists, add to state
+          # If it doesn't exist, import fails silently (|| true)
+          terraform import \
+            aws_ecs_service.bastion_service \
+            "$CLUSTER_NAME/$SERVICE_NAME" 2>/dev/null || true
+          
+          echo "✓ Import step done (service added to state if existed)"
+
       - name: Terraform Plan & Apply (START)
         if: github.event.inputs.action == 'START'
         working-directory: ./terraform
