@@ -48,7 +48,7 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Budowanie i push obrazu Docker (tylko dla START)
+      - name: Budowanie obrazu Docker (tylko dla START)
         if: github.event.inputs.action == 'START'
         run: |
           # Zbuduj obraz
@@ -58,26 +58,44 @@ jobs:
           IMAGE_URI=${{ steps.login-ecr.outputs.registry }}/bastion:${{ github.sha }}
           docker tag bastion $IMAGE_URI
           
-          # Push do ECR
-          docker push $IMAGE_URI
-          
           # Zapisz URI jako output
           echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_OUTPUT
+
+      - name: Skanowanie obrazu na podatności (Trivy)
+        if: github.event.inputs.action == 'START'
+        run: |
+          # Instalacja Trivy
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+          
+          # Skanowanie obrazu - pokaż HIGH i CRITICAL CVE
+          echo "Skanowanie obrazu na podatności..."
+          /usr/local/bin/trivy image --exit-code 0 --severity HIGH,CRITICAL --no-progress bastion
+          
+          # Dla produkcji odkomentuj poniżej (exit-code 1 spowoduje błąd workflow):
+          # /usr/local/bin/trivy image --exit-code 1 --severity HIGH,CRITICAL --no-progress bastion
+
+      - name: Push obrazu do Amazon ECR
+        if: github.event.inputs.action == 'START'
+        run: |
+          IMAGE_URI=${{ steps.login-ecr.outputs.registry }}/bastion:${{ github.sha }}
+          docker push $IMAGE_URI
+          echo "Obraz $IMAGE_URI został wysłany do ECR"
 
       - name: Terraform Init
         working-directory: ./terraform
         run: terraform init
 
-      - name: Terraform Apply (START)
+      - name: Terraform Plan & Apply (START)
         if: github.event.inputs.action == 'START'
         working-directory: ./terraform
         run: |
-          terraform apply \
-            -auto-approve \
+          terraform plan \
+            -out=tfplan \
             -var="vpc_id=${{ vars.VPC_ID }}" \
             -var="region=${{ env.AWS_REGION }}" \
             -var="container_image=${{ steps.login-ecr.outputs.registry }}/bastion:${{ github.sha }}" \
             -var="serveo_subdomain=${{ github.event.inputs.serveo_subdomain }}"
+          terraform apply tfplan
 
       - name: Pobranie outputów Terraform
         if: github.event.inputs.action == 'START'
@@ -97,25 +115,65 @@ jobs:
       - name: Oczekiwanie na uruchomienie tasku i pobranie logów
         if: github.event.inputs.action == 'START'
         run: |
-          echo "Oczekiwanie na uruchomienie tasku ECS..."
-          sleep 45
-          
-          # Pobierz logi z CloudWatch
+          CLUSTER_NAME=${{ steps.terraform-outputs.outputs.cluster_name }}
+          TASK_ID=${{ steps.terraform-outputs.outputs.task_id }}
           LOG_GROUP=${{ steps.terraform-outputs.outputs.log_group }}
           
+          echo "Oczekiwanie na uruchomienie tasku ECS..."
+          echo "Cluster: $CLUSTER_NAME"
+          echo "Task ID: $TASK_ID"
+          
+          # Czekaj max 120 sekund na start tasku
+          MAX_ATTEMPTS=60
+          ATTEMPT=0
+          TASK_RUNNING=false
+          
+          while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+            ATTEMPT=$((ATTEMPT + 1))
+            
+            # Pobierz status tasku
+            STATUS=$(aws ecs describe-tasks \
+              --cluster "$CLUSTER_NAME" \
+              --tasks "$TASK_ID" \
+              --query 'tasks[0].lastStatus' \
+              --output text 2>/dev/null || echo "ERROR")
+            
+            echo "[$ATTEMPT/$MAX_ATTEMPTS] Task status: $STATUS"
+            
+            if [ "$STATUS" = "RUNNING" ]; then
+              echo "✓ Task uruchomiony pomyślnie!"
+              TASK_RUNNING=true
+              sleep 5  # Dodaj buffer na inicjalizację tunelu
+              break
+            fi
+            
+            if [ "$STATUS" = "STOPPED" ] || [ "$STATUS" = "STOPPING" ]; then
+              echo "✗ Task się nie uruchomił! Status: $STATUS"
+              break
+            fi
+            
+            sleep 2
+          done
+          
+          if [ "$TASK_RUNNING" = "false" ]; then
+            echo "ERROR: Task nie uruchomił się w ciągu 120 sekund!"
+            exit 1
+          fi
+          
+          echo ""
           echo "Pobieranie logów z grupy: $LOG_GROUP"
           
           # Pobierz ostatnie logi używając filter-log-events
           aws logs filter-log-events \
             --log-group-name "$LOG_GROUP" \
             --start-time $(($(date +%s) * 1000 - 300000)) \
-            --filter-pattern "serveo" \
-            --max-events 50 \
+            --filter-pattern "" \
+            --max-events 100 \
             --query 'events[*].[message]' \
-            --output text > /tmp/serveo_logs.txt || true
+            --output text 2>/dev/null > /tmp/bastion_logs.txt || true
           
           echo "=== Logi z CloudWatch ==="
-          cat /tmp/serveo_logs.txt
+          cat /tmp/bastion_logs.txt || echo "Brak logów"
 
       - name: Wyświetlenie URL Serveo.net w GitHub Summary
         if: github.event.inputs.action == 'START'
@@ -127,7 +185,7 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Połącz się z bastionem używając:" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          echo "ssh ${SERVEO_URL}" >> $GITHUB_STEP_SUMMARY
+          echo "ssh -p 80 ${SERVEO_SUBDOMAIN}.serveo.net" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**URL tunelu:** $SERVEO_URL" >> $GITHUB_STEP_SUMMARY

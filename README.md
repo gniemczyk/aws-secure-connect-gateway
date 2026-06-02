@@ -23,8 +23,9 @@ Bezpieczny, efemeryczny bastion SSH oparty na AWS ECS Fargate z autoryzacją Git
 
 ### Bezpieczeństwo Sieciowe
 - **Tymczasowa podsieć**: Tworzona na czas życia bastionu
-- **Security Group**: Tylko outbound (inbound całkowicie zablokowany)
+- **Security Group**: Zablokowany inbound, outbound tylko na SSH (port 22) i DNS (port 53)
 - **Public IP**: Tylko dla połączenia z Serveo.net
+- **Ograniczony ruch**: Brak możliwości danych exfiltration
 
 ## Wymagania Wstępne
 
@@ -90,7 +91,16 @@ Utwórz prywatne repozytorium ECR o nazwie `bastion` w regionie `eu-central-1`.
 ### Połączenie z Bastionem
 
 ```bash
-ssh https://twoja-subdomena.serveo.net
+# Użyj portu 80 (HTTP) dla tunelu Serveo.net
+ssh -p 80 twoja-subdomena.serveo.net
+
+# Alternatywnie, jeśli port 80 jest zablokowany, użyj:
+ssh -o ProxyCommand="curl -H @- http://twoja-subdomena.serveo.net" %h
+```
+
+**Przykład z rzeczywistą subdomą:**
+```bash
+ssh -p 80 ephemeral-bastion-abc123.serveo.net
 ```
 
 ### Zatrzymanie Bastionu (STOP)

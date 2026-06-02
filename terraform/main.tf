@@ -59,11 +59,19 @@ resource "aws_security_group" "bastion_sg" {
   # Brak reguł inbound - całkowicie zablokowany
   # To jest bezpieczne, bo kontener nie przyjmuje połączeń, tylko inicjuje tunel wychodzący
 
-  # Outbound - pozwól na wszystko (potrzebne dla połączenia z Serveo.net)
+  # Outbound - tylko SSH (port 22) dla połączenia z Serveo.net
   egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  # Outbound DNS (port 53) dla resolucji nazw
+  egress {
+    from_port   = 53
+    to_port     = 53
+    protocol    = "udp"
     cidr_blocks = ["0.0.0.0/0"]
   }
 
@@ -152,7 +160,7 @@ resource "aws_ecs_task_definition" "bastion_task" {
       essential = true
 
       # Maksymalne hardening bezpieczeństwa
-      readonlyRootFilesystem = true # System plików całkowicie zablokowany do zapisu
+      readonlyRootFilesystem = true  # System plików całkowicie zablokowany do zapisu
       disableNetworking      = false # Potrzebne dla połączenia z Serveo.net
 
       # Uruchomienie jako nieuprzywilejowany użytkownik
@@ -164,8 +172,8 @@ resource "aws_ecs_task_definition" "bastion_task" {
       # Brak możliwości dodawania capabilities
       linuxParameters = {
         capabilities = {
-          drop  = ["ALL"]
-          add    = []
+          drop = ["ALL"]
+          add  = []
         }
         devices = []
       }
@@ -209,11 +217,9 @@ resource "random_id" "serveo_suffix" {
 
 # Uruchomienie pojedynczego tasku (nie Service, tylko Task dla efemeryczności)
 resource "aws_ecs_task" "bastion_task" {
-  cluster           = aws_ecs_cluster.bastion_cluster.id
-  task_definition    = aws_ecs_task_definition.bastion_task.arn
-  launch_type       = "FARGATE"
-  desired_count      = 1
-  enable_execute_command = false # Brak możliwości execute command (dodatkowe zabezpieczenie)
+  cluster         = aws_ecs_cluster.bastion_cluster.arn
+  task_definition = aws_ecs_task_definition.bastion_task.arn
+  launch_type     = "FARGATE"
 
   network_configuration {
     subnets          = [aws_subnet.bastion_subnet.id]
@@ -226,9 +232,5 @@ resource "aws_ecs_task" "bastion_task" {
   tags = {
     Environment = "ephemeral"
     ManagedBy   = "terraform"
-  }
-
-  lifecycle {
-    ignore_changes = [desired_count]
   }
 }
