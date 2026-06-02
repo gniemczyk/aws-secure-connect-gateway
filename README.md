@@ -36,6 +36,7 @@ Ustaw w repozytorium GitHub (Settings → Secrets and variables → Actions → 
 ### 2. GitHub Variables - 1 minute setup  
 Ustaw w repozytorium GitHub (Settings → Secrets and variables → Actions → Variables):
 - `VPC_ID`: Twój VPC ID (np. `vpc-12345678`)
+- `AWS_REGION`: Region AWS gdzie masz VPC (np. `eu-north-1`, `eu-central-1`, `us-east-1`)
 
 ### 3. AWS Configuration
 
@@ -79,6 +80,33 @@ Skonfiguruj OIDC w AWS (one-time setup):
    Lub dla maksymalnej elastyczności: `AdministratorAccess`
 
 4. **Skopiuj ARN roli** i ustaw jako `AWS_ROLE_ARN` w GitHub Secrets
+
+### Docker Image - GitHub Container Registry (GHCR)
+
+⚠️ **Ważne:** Workflow builduje i pushuje obraz do **GitHub Container Registry (GHCR)**, nie do AWS ECR!
+
+```
+Obraz jest dostępny w: ghcr.io/YOUR_USERNAME/secure-connect-gateway/bastion:SHA
+```
+
+**Przykład:**
+```
+ghcr.io/gniemczyk/secure-connect-gateway/bastion:bbab573c7527
+```
+
+**Gdzie szukać obrazu:**
+1. GitHub → Settings → Packages
+2. Lub: https://github.com/settings/packages
+3. Obraz jest **prywatny** (na poziomie repozytorium)
+
+**Uwaga:** To nie jest AWS ECR! Obraz jest przechowywany na serwerach GitHub, nie AWS.
+
+**Dlaczego GHCR zamiast ECR?**
+- ✅ Bezpłatny (GitHub native)
+- ✅ Brak konfiguracji
+- ✅ Auto-cleanup starych image'ów
+- ✅ GitHub Token już dostępny (zero setup)
+- ✅ Prywatny domyślnie
 
 ## Użycie
 
