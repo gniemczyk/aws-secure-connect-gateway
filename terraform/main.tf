@@ -327,12 +327,6 @@ resource "aws_ecs_service" "bastion_service" {
     assign_public_ip = true
   }
 
-  # Deployment strategy: 1 task na raz (no rolling update needed)
-  deployment_configuration {
-    maximum_percent         = 100
-    minimum_healthy_percent = 0
-  }
-
   # Pilnuj aby zawsze był 1 task - jeśli się crash'a, restart automatycznie
   lifecycle {
     ignore_changes = [task_definition]  # Workflow update task def, service auto-picks latest
