@@ -34,20 +34,28 @@ data "aws_availability_zones" "available" {
 # Algorithm:
 # 1. VPC CIDR = 10.0.0.0/16
 # 2. Existing subnets occupy specific /24s (e.g., 10.0.1.0/24, 10.0.2.0/24)
-# 3. Find first /24 index (0-255) that is NOT used
-# 4. Create new subnet with that /24
+# 3. Generate all possible /24s from VPC (0-255)
+# 4. Filter out ones that conflict with existing
+# 5. Pick the first available one
 locals {
   vpc_cidr       = data.aws_vpc.selected.cidr_block
   existing_cidrs = toset([for subnet in data.aws_subnet.existing : subnet.cidr_block])
   
-  # Try CIDR blocks from 10.0.0.0/24 to 10.0.255.0/24
-  # Find first one NOT in existing_cidrs
-  available_subnet_index = range(0, 256)[index(
-    [for idx in range(0, 256) : true if !contains(local.existing_cidrs, cidrsubnet(local.vpc_cidr, 8, idx))],
-    true
-  )]
+  # Generate ALL possible /24 CIDRs from this VPC
+  all_possible_cidrs = [
+    for idx in range(0, 256) :
+    cidrsubnet(local.vpc_cidr, 8, idx)
+  ]
   
-  new_subnet_cidr = cidrsubnet(local.vpc_cidr, 8, local.available_subnet_index)
+  # Filter to only AVAILABLE CIDRs (not in existing_cidrs)
+  available_cidrs = [
+    for cidr in local.all_possible_cidrs :
+    cidr if !contains(local.existing_cidrs, cidr)
+  ]
+  
+  # Use first available, or fallback to first possible (shouldn't happen)
+  new_subnet_cidr = length(local.available_cidrs) > 0 ? local.available_cidrs[0] : local.all_possible_cidrs[0]
+}
 }
 
 # Create temporary subnet for bastion

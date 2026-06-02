@@ -1,5 +1,15 @@
 # Outputs from Terraform configuration
 
+output "debug_existing_subnets" {
+  description = "DEBUG: All existing subnets in VPC"
+  value       = [for subnet in data.aws_subnet.existing : "${subnet.id}: ${subnet.cidr_block}"]
+}
+
+output "debug_available_cidrs" {
+  description = "DEBUG: First 10 available CIDR blocks"
+  value       = slice(local.available_cidrs, 0, min(10, length(local.available_cidrs)))
+}
+
 output "cluster_name" {
   description = "ECS Cluster name"
   value       = aws_ecs_cluster.bastion_cluster.name
