@@ -93,6 +93,7 @@ resource "aws_ecs_cluster" "bastion_cluster" {
 resource "aws_cloudwatch_log_group" "bastion_logs" {
   name              = "/ecs/${var.bastion_name}"
   retention_in_days = 1
+  skip_destroy      = true
 
   tags = {
     Environment = "ephemeral"
