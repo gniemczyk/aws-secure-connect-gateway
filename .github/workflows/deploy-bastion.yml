@@ -48,26 +48,39 @@ jobs:
       - name: Logowanie do Amazon ECR
         if: github.event.inputs.action == 'START'
         id: login-ecr
+        timeout-minutes: 5
         uses: aws-actions/amazon-ecr-login@v2
         with:
           registries: ${{ secrets.AWS_ACCOUNT_ID }}
 
       - name: Create ECR Repository if not exists
         if: github.event.inputs.action == 'START'
+        timeout-minutes: 5
         run: |
-          aws ecr describe-repositories \
+          echo "Sprawdzanie ECR repository..."
+          
+          # Check if repo exists
+          if aws ecr describe-repositories \
             --repository-names ${{ env.ECR_REPOSITORY }} \
             --region ${{ env.AWS_REGION }} \
-            2>/dev/null || \
-          aws ecr create-repository \
-            --repository-name ${{ env.ECR_REPOSITORY }} \
-            --region ${{ env.AWS_REGION }} \
-            --encryption-configuration encryptionType=AES256 \
-            --image-scanning-configuration scanOnPush=true
+            2>/dev/null; then
+            echo "✓ Repository już istnieje"
+          else
+            echo "Repository nie istnieje - tworzę..."
+            aws ecr create-repository \
+              --repository-name ${{ env.ECR_REPOSITORY }} \
+              --region ${{ env.AWS_REGION }} \
+              --encryption-configuration encryptionType=AES256 \
+              --image-scanning-configuration scanOnPush=true
+            echo "✓ Repository utworzone"
+          fi
 
       - name: Set ECR Lifecycle Policy (keep only latest images)
         if: github.event.inputs.action == 'START'
+        timeout-minutes: 2
         run: |
+          echo "Ustawianie lifecycle policy..."
+          
           cat > /tmp/lifecycle-policy.json << 'EOF'
           {
             "rules": [
@@ -91,6 +104,8 @@ jobs:
             --repository-name ${{ env.ECR_REPOSITORY }} \
             --lifecycle-policy-text file:///tmp/lifecycle-policy.json \
             --region ${{ env.AWS_REGION }} 2>/dev/null || true
+          
+          echo "✓ Lifecycle policy ustawiona"
 
       - name: Build Docker image (START)
         if: github.event.inputs.action == 'START'
