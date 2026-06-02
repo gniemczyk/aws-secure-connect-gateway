@@ -314,16 +314,7 @@ resource "aws_ecs_task_definition" "bastion_task" {
 
 # --- ECS SERVICE (pilnuje aby zawsze był 1 task uruchomiony) ---
 
-# Try to find existing ECS Service
-data "aws_ecs_service" "existing" {
-  count           = try(data.aws_ecs_service.existing[0], null) != null ? 0 : 1
-  name            = "${var.bastion_name}-service"
-  cluster         = aws_ecs_cluster.bastion_cluster.name
-}
-
 resource "aws_ecs_service" "bastion_service" {
-  # Skip creation if service already exists
-  count           = try(data.aws_ecs_service.existing[0].name, null) != null ? 0 : 1
   name            = "${var.bastion_name}-service"
   cluster         = aws_ecs_cluster.bastion_cluster.id
   task_definition = aws_ecs_task_definition.bastion_task.arn
@@ -349,9 +340,4 @@ resource "aws_ecs_service" "bastion_service" {
     aws_ecs_task_definition.bastion_task,
     aws_cloudwatch_log_group.bastion_logs
   ]
-}
-
-# Use existing service or newly created one
-locals {
-  service_name = try(data.aws_ecs_service.existing[0].name, aws_ecs_service.bastion_service[0].name)
 }
