@@ -36,6 +36,7 @@ resource "aws_subnet" "bastion_subnet" {
 
   lifecycle {
     ignore_changes = [tags]
+    create_before_destroy = true
   }
 }
 
