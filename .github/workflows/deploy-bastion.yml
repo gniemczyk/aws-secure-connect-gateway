@@ -137,14 +137,24 @@ jobs:
         working-directory: ./terraform
         run: terraform init
 
-      - name: Import existing ECS Service (if exists) into Terraform state
+      - name: Import existing resources into Terraform state
         if: github.event.inputs.action == 'START'
         working-directory: ./terraform
         run: |
+          ROLE_NAME="ephemeral-bastion-exec-role"
           CLUSTER_NAME="ephemeral-bastion-cluster"
           SERVICE_NAME="ephemeral-bastion-service"
           
-          # Import existing service with variables (if it exists, add to state)
+          # Import IAM role (if it exists from previous run)
+          terraform import \
+            -var="vpc_id=${{ vars.VPC_ID }}" \
+            -var="region=${{ env.AWS_REGION }}" \
+            -var="container_image=${{ env.IMAGE_URI }}" \
+            -var="serveo_subdomain=${{ github.event.inputs.serveo_subdomain }}" \
+            aws_iam_role.ecs_task_execution_role \
+            "$ROLE_NAME" 2>/dev/null || true
+          
+          # Import ECS Service (if it exists from previous run)
           terraform import \
             -var="vpc_id=${{ vars.VPC_ID }}" \
             -var="region=${{ env.AWS_REGION }}" \
@@ -153,7 +163,7 @@ jobs:
             aws_ecs_service.bastion_service \
             "$CLUSTER_NAME/$SERVICE_NAME" 2>/dev/null || true
           
-          echo "✓ Import step done (service added to state if existed)"
+          echo "✓ Resources imported (added to state if existed)"
 
       - name: Terraform Plan & Apply (START)
         if: github.event.inputs.action == 'START'

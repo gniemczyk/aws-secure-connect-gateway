@@ -226,7 +226,7 @@ data "aws_iam_policy_document" "ecs_task_execution_role_assume" {
 }
 
 resource "aws_iam_role" "ecs_task_execution_role" {
-  name_prefix        = "${var.bastion_name}-exec-role-"
+  name               = "${var.bastion_name}-exec-role"
   assume_role_policy = data.aws_iam_policy_document.ecs_task_execution_role_assume.json
 
   tags = {
