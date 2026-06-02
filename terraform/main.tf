@@ -311,3 +311,40 @@ resource "aws_ecs_task_definition" "bastion_task" {
     ManagedBy   = "terraform"
   }
 }
+
+# --- ECS SERVICE (pilnuje aby zawsze był 1 task uruchomiony) ---
+
+resource "aws_ecs_service" "bastion_service" {
+  name            = "${var.bastion_name}-service"
+  cluster         = aws_ecs_cluster.bastion_cluster.id
+  task_definition = aws_ecs_task_definition.bastion_task.arn
+  desired_count   = 1
+  launch_type     = "FARGATE"
+
+  network_configuration {
+    subnets          = [local.bastion_subnet_id]
+    security_groups  = [local.bastion_sg_id]
+    assign_public_ip = true
+  }
+
+  # Deployment strategy: 1 task na raz (no rolling update needed)
+  deployment_configuration {
+    maximum_percent         = 100
+    minimum_healthy_percent = 0
+  }
+
+  # Pilnuj aby zawsze był 1 task - jeśli się crash'a, restart automatycznie
+  lifecycle {
+    ignore_changes = [task_definition]  # Workflow update task def, service auto-picks latest
+  }
+
+  tags = {
+    Environment = "ephemeral"
+    ManagedBy   = "terraform"
+  }
+
+  depends_on = [
+    aws_ecs_task_definition.bastion_task,
+    aws_cloudwatch_log_group.bastion_logs
+  ]
+}

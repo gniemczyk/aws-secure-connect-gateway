@@ -174,70 +174,63 @@ jobs:
           echo "log_group=$LOG_GROUP" >> $GITHUB_OUTPUT
           echo "serveo_subdomain=$SERVEO_SUBDOMAIN" >> $GITHUB_OUTPUT
 
-      - name: Stop any existing ECS Tasks (cleanup before START)
-        if: github.event.inputs.action == 'START'
-        run: |
-          echo "Zatrzymywanie starych tasków (jeśli istnieją)..."
-          
-          CLUSTER_NAME=${{ steps.terraform-outputs.outputs.cluster_name }}
-          REGION=${{ env.AWS_REGION }}
-          
-          # Pobierz wszystkie uruchomione taski
-          RUNNING_TASKS=$(aws ecs list-tasks \
-            --cluster "$CLUSTER_NAME" \
-            --desired-status RUNNING \
-            --region "$REGION" \
-            --query 'taskArns[]' \
-            --output text 2>/dev/null || echo "")
-          
-          if [ -z "$RUNNING_TASKS" ]; then
-            echo "Brak uruchomionych tasków"
-          else
-            echo "Zatrzymywanie: $RUNNING_TASKS"
-            for TASK_ARN in $RUNNING_TASKS; do
-              aws ecs stop-task \
-                --cluster "$CLUSTER_NAME" \
-                --task "$TASK_ARN" \
-                --region "$REGION" 2>/dev/null || true
-            done
-            echo "✓ Stare taski zatrzymane"
-          fi
-
-      - name: Run ECS Task (START)
+      - name: Trigger ECS Service Redeploy (restart with new image)
         if: github.event.inputs.action == 'START'
         id: run-task
         run: |
-          TASK_RESPONSE=$(aws ecs run-task \
-            --cluster ${{ steps.terraform-outputs.outputs.cluster_arn }} \
-            --task-definition ${{ steps.terraform-outputs.outputs.task_def_arn }} \
-            --network-configuration "awsvpcConfiguration={subnets=[${{ steps.terraform-outputs.outputs.subnet_id }}],securityGroups=[${{ steps.terraform-outputs.outputs.sg_id }}],assignPublicIp=ENABLED}" \
-            --launch-type FARGATE \
-            --region ${{ env.AWS_REGION }})
+          SERVICE_NAME=${{ steps.terraform-outputs.outputs.service_name }}
+          CLUSTER_NAME=${{ steps.terraform-outputs.outputs.cluster_name }}
+          REGION=${{ env.AWS_REGION }}
           
-          TASK_ARN=$(echo $TASK_RESPONSE | jq -r '.tasks[0].taskArn')
-          TASK_ID=$(echo $TASK_ARN | awk -F'/' '{print $NF}')
+          echo "Aktualizowanie ECS Service: $SERVICE_NAME"
+          echo "Service automatycznie: stop old task → start new task"
           
-          echo "task_id=$TASK_ID" >> $GITHUB_OUTPUT
-          echo "Task started: $TASK_ID"
+          # Force service to redeploy (pick new task definition)
+          aws ecs update-service \
+            --cluster "$CLUSTER_NAME" \
+            --service "$SERVICE_NAME" \
+            --force-new-deployment \
+            --region "$REGION" > /dev/null
+          
+          echo "✓ Service redeploy triggered"
+          echo "ECS cluster pilnuje aby zawsze był 1 task uruchomiony"
 
       - name: Oczekiwanie na uruchomienie tasku i pobranie logów
         if: github.event.inputs.action == 'START'
         id: wait-and-logs
         run: |
           CLUSTER_NAME=${{ steps.terraform-outputs.outputs.cluster_name }}
-          TASK_ID=${{ steps.run-task.outputs.task_id }}
+          SERVICE_NAME=${{ steps.terraform-outputs.outputs.service_name }}
           LOG_GROUP=${{ steps.terraform-outputs.outputs.log_group }}
           
-          echo "Oczekiwanie na uruchomienie tasku ECS..."
-          echo "Cluster: $CLUSTER_NAME"
-          echo "Task ID: $TASK_ID"
+          echo "Oczekiwanie na uruchomienie tasku w Service..."
+          echo "Service: $SERVICE_NAME"
+          echo "ECS pilnuje aby zawsze był dokładnie 1 task RUNNING"
           
           MAX_ATTEMPTS=60
           ATTEMPT=0
           TASK_RUNNING=false
+          TASK_ID=""
           
           while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
             ATTEMPT=$((ATTEMPT + 1))
+            
+            # Pobierz running task z SERVICE (zawsze tylko 1 ze względu na desired_count=1)
+            TASK_ID=$(aws ecs list-tasks \
+              --cluster "$CLUSTER_NAME" \
+              --service-name "$SERVICE_NAME" \
+              --desired-status RUNNING \
+              --region ${{ env.AWS_REGION }} \
+              --query 'taskArns[0]' \
+              --output text 2>/dev/null || echo "")
+            
+            if [ -z "$TASK_ID" ] || [ "$TASK_ID" = "None" ]; then
+              echo "[$ATTEMPT/$MAX_ATTEMPTS] Czekanie na task..."
+              sleep 2
+              continue
+            fi
+            
+            TASK_ID=$(echo "$TASK_ID" | awk -F'/' '{print $NF}')
             
             TASK_INFO=$(aws ecs describe-tasks \
               --cluster "$CLUSTER_NAME" \
@@ -247,7 +240,7 @@ jobs:
             
             STATUS=$(echo "$TASK_INFO" | jq -r '.lastStatus // "UNKNOWN"')
             
-            echo "[$ATTEMPT/$MAX_ATTEMPTS] Task status: $STATUS"
+            echo "[$ATTEMPT/$MAX_ATTEMPTS] Task: $TASK_ID Status: $STATUS"
             
             if [ "$STATUS" = "RUNNING" ]; then
               echo "✓ Task uruchomiony pomyślnie!"

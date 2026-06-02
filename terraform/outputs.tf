@@ -50,3 +50,8 @@ output "serveo_subdomain" {
   value       = var.serveo_subdomain != "" ? var.serveo_subdomain : "${var.bastion_name}-${random_id.serveo_suffix.hex}"
 }
 
+output "service_name" {
+  description = "ECS Service name (pilnuje aby zawsze był 1 task)"
+  value       = aws_ecs_service.bastion_service.name
+}
+
