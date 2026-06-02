@@ -93,18 +93,134 @@ Skonfiguruj OIDC w AWS (one-time setup):
 
 ### Połączenie z Bastionem
 
-```bash
-# Użyj portu 80 (HTTP) dla tunelu Serveo.net
-ssh -p 80 twoja-subdomena.serveo.net
+#### 1. Podstawowe SSH dostęp
 
-# Alternatywnie, jeśli port 80 jest zablokowany, użyj:
-ssh -o ProxyCommand="curl -H @- http://twoja-subdomena.serveo.net" %h
-```
+Po uruchomieniu workflow **START**, otrzymasz URL w GitHub Summary:
 
-**Przykład z rzeczywistą subdomą:**
 ```bash
+# Bezpośrednie SSH do bastionu
 ssh -p 80 ephemeral-bastion-abc123.serveo.net
+
+# Jeśli port 80 jest zablokowany:
+ssh -o ProxyCommand="curl -H @- http://ephemeral-bastion-abc123.serveo.net" %h
 ```
+
+⚠️ **Ważne:** Bastion sam z siebie **nie da ci dostępu do żadnego serwera**. To jest tunel SSH - musisz mieć dostęp do wewnętrznych zasobów z innego miejsca (np. VPN, internal network, lub inny bastion).
+
+#### 2. Port Forwarding - Dostęp do MySQL/PostgreSQL/itp.
+
+Jeśli masz dostęp do bazy danych wewnątrz VPC (np. MySQL na `10.0.1.50:3306`):
+
+**Wariant A - Forward lokalnie na port 3306:**
+```bash
+ssh -p 80 -L 3306:10.0.1.50:3306 ephemeral-bastion-abc123.serveo.net
+```
+
+Teraz połącz się lokalnie:
+```bash
+mysql -h localhost -u admin -p
+# lub
+psql -h localhost -U admin -d mydb
+```
+
+**Wariant B - Forward na inny port (np. 8306 - aby nie kolidować):**
+```bash
+ssh -p 80 -L 8306:10.0.1.50:3306 ephemeral-bastion-abc123.serveo.net
+```
+
+Teraz połącz się na innym porcie:
+```bash
+mysql -h localhost -P 8306 -u admin -p
+```
+
+**Wariant C - Forward z IP wewnętrznym (dostęp z innych komputerów w sieci):**
+```bash
+ssh -p 80 -L 0.0.0.0:3306:10.0.1.50:3306 ephemeral-bastion-abc123.serveo.net
+```
+
+Inne komputery w Twojej sieci mogą teraz łączyć się:
+```bash
+mysql -h 192.168.1.100 -u admin -p  # Twój IP w sieci
+```
+
+#### 3. Praktyczne przykłady
+
+**Dostęp do Redis wewnątrz VPC:**
+```bash
+ssh -p 80 -L 6379:internal-redis.ec2.internal:6379 ephemeral-bastion-abc123.serveo.net
+# Używaj: redis-cli -h localhost -p 6379
+```
+
+**Dostęp do RDS bazy danych:**
+```bash
+ssh -p 80 -L 5432:mydb.abcdefg.eu-central-1.rds.amazonaws.com:5432 ephemeral-bastion-abc123.serveo.net
+# Używaj: psql -h localhost -U postgres -d mydb
+```
+
+**Dostęp do innego serwera SSH wewnątrz VPC:**
+```bash
+ssh -p 80 -L 2222:10.0.2.100:22 ephemeral-bastion-abc123.serveo.net
+# Pierwsze SSH połączenie: wewnętrzny serwer
+ssh -p 2222 localhost
+```
+
+#### 4. Jak to działa - przepływ dostępu
+
+```
+Twój komputer (localhost:3306)
+           ↓ SSH-P 80
+    Serveo.net tunel (publiczny)
+           ↓
+  ECS Fargate Task (private)
+           ↓ SSH client w kontenerze
+  Zasoby wewnątrz VPC (10.0.x.x)
+```
+
+Kroki:
+1. Workflow **START** uruchamia task w Fargate
+2. Task uruchamia SSH klienta, który łączy się z Serveo.net
+3. Ty łączysz się do localhost:3306 (lub innego portu)
+4. SSH tunel forwarduje ruch do IP/portu wewnątrz VPC
+5. Task przesyła odpowiedź z powrotem przez Serveo.net do Ciebie
+
+#### 5. Troubleshooting forwardowania
+
+**Błąd: "Connection refused"**
+```bash
+# Sprawdź czy zarejestrowany IP:port istnieje wewnątrz VPC
+ping 10.0.1.50
+telnet 10.0.1.50 3306
+```
+
+**Błąd: "Address already in use" (port 3306 zajęty)**
+```bash
+# Użyj innego portu:
+ssh -p 80 -L 8306:10.0.1.50:3306 ephemeral-bastion-abc123.serveo.net
+```
+
+**Port 80 zablokowany - użyj tunelu przez HTTP:**
+```bash
+ssh -p 80 -o ProxyCommand="curl -H @- http://ephemeral-bastion-abc123.serveo.net" \
+    -L 3306:10.0.1.50:3306 %h
+```
+
+#### 6. Keep tunnel alive
+
+SSH może się rozłączyć po nieaktywności. Aby utrzymać tunel:
+
+```bash
+ssh -p 80 \
+    -L 3306:10.0.1.50:3306 \
+    -o ServerAliveInterval=60 \
+    -o ServerAliveCountMax=3 \
+    -N \
+    ephemeral-bastion-abc123.serveo.net
+```
+
+Opcje:
+- `-N`: Nie wykonuj żadnego polecenia, tylko tunel
+- `-o ServerAliveInterval=60`: Ping co 60 sekund
+- `-o ServerAliveCountMax=3`: Rozłącz po 3 nieudanych ping'ach (3 minuty timeout)
 
 ### Zatrzymanie Bastionu (STOP)
 
@@ -146,6 +262,18 @@ Gdy uruchomisz workflow **STOP**:
 - VPC pozostaje nienaruszone (będzie można go ponownie użyć)
 
 ## Troubleshooting
+
+### Ogólne informacje
+
+**Co robić jeśli task się uruchamia, ale nie mogę się połączyć?**
+
+Typowy flow:
+1. Task startuje w prywatnej sieci AWS (VPC)
+2. Task uruchamia SSH klient, który tworzy tunel do Serveo.net
+3. Ty łączysz się z Serveo.net (publiczny)
+4. Ruch jest forwardowany przez tunel do zasobów w Twojej VPC
+
+Jeśli coś nie działa, sprawdź każdy krok.
 
 ### Task nie uruchamia się
 - Sprawdź czy VPC_ID jest poprawne
