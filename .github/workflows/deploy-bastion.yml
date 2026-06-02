@@ -191,7 +191,7 @@ jobs:
           echo "task_id=$TASK_ID" >> $GITHUB_OUTPUT
           echo "Task started: $TASK_ID"
 
-       - name: Oczekiwanie na uruchomienie tasku i pobranie logów
+      - name: Oczekiwanie na uruchomienie tasku i pobranie logów
         if: github.event.inputs.action == 'START'
         id: wait-and-logs
         run: |
@@ -292,7 +292,7 @@ jobs:
           
           echo "actual_subdomain=$ACTUAL_SUBDOMAIN" >> $GITHUB_OUTPUT
 
-       - name: Wyświetlenie podsumowania połączenia
+      - name: Wyświetlenie podsumowania połączenia
         if: github.event.inputs.action == 'START' && success()
         run: |
           ACTUAL_SUBDOMAIN=${{ steps.wait-and-logs.outputs.actual_subdomain }}
@@ -331,7 +331,7 @@ jobs:
           
           EOF
 
-       - name: Wyświetlenie URL Serveo.net w GitHub Summary
+      - name: Wyświetlenie URL Serveo.net w GitHub Summary
         if: github.event.inputs.action == 'START' && false
         run: |
           echo "Step disabled - use new summary above"
