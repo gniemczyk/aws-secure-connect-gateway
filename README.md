@@ -29,21 +29,12 @@ Bezpieczny, efemeryczny bastion SSH oparty na AWS ECS Fargate z autoryzacją Git
 
 ## Wymagania Wstępne - QUICK START
 
-### 0. AWS Setup - ECR Repository
-Utwórz prywatne ECR repository w Twoim regionie:
-
-```bash
-aws ecr create-repository \
-  --repository-name secure-connect-gateway \
-  --region eu-north-1
-```
-
-### 1. GitHub Secrets - 2 minutes setup
+### 1. GitHub Secrets
 Ustaw w repozytorium GitHub (Settings → Secrets and variables → Actions → Secrets):
 - `AWS_ROLE_ARN`: Twoja rola IAM ARN (np. `arn:aws:iam::837175765719:role/github-actions-role`)
 - `AWS_ACCOUNT_ID`: Twój AWS Account ID (np. `837175765719`)
 
-### 2. GitHub Variables - 1 minute setup  
+### 2. GitHub Variables  
 Ustaw w repozytorium GitHub (Settings → Secrets and variables → Actions → Variables):
 - `VPC_ID`: Twój VPC ID (np. `vpc-12345678`)
 - `AWS_REGION`: Region AWS gdzie masz VPC (np. `eu-north-1`, `eu-central-1`, `us-east-1`)
@@ -91,28 +82,22 @@ Skonfiguruj OIDC w AWS (one-time setup):
 
 4. **Skopiuj ARN roli** i ustaw jako `AWS_ROLE_ARN` w GitHub Secrets
 
-### Docker Image - Amazon ECR
+### Docker Image - Automatycznie tworzone w AWS ECR
 
-⚠️ **Ważne:** Workflow builduje i pushuje obraz do **AWS ECR** (Elastic Container Registry), a ECS Fargate pobiera obraz z ECR.
+✅ **Automatyka:** Workflow automatycznie:
+- Tworzy ECR repository jeśli nie istnieje
+- Builduje nowy image za każdym **START**
+- Pushuje do AWS ECR w Twoim regionie
+- Skanuje image na podatności (Trivy)
+- Usuwa stary image (jeśli istnieje)
 
+**Gdzie jest obraz:**
 ```
-Obraz jest umieszczany w: AWS ECR w Twoim regionie
-Repozytorium: secure-connect-gateway
-Tag: SHA commit (np. bbab573c7527)
+AWS ECR → Region: vars.AWS_REGION → Repository: secure-connect-gateway
+Full URI: ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/secure-connect-gateway:COMMIT_SHA
 ```
 
-**Gdzie znaleźć obraz:**
-1. AWS Console → ECR (w regionie `vars.AWS_REGION`)
-2. Repozytorium: `secure-connect-gateway`
-3. Tag: commit SHA (np. `bbab573c7527`)
-4. Full URI: `837175765719.dkr.ecr.eu-north-1.amazonaws.com/secure-connect-gateway:bbab573c7527`
-
-**Dlaczego ECR zamiast GitHub Container Registry?**
-- ✅ Native do AWS (ECS może pobierać bez dodatkowej konfiguracji)
-- ✅ Prywatny (bezpieczny dla bastionu)
-- ✅ Łatwa integracja z ECS
-- ✅ Koszt: ~$0.50/miesiąc za storage
-- ✅ GHCR byłby prywatny i ECS nie miałby dostępu bez dodatkowego setupu
+**Plik tworzy się za każdym START - brak ręcznego setup'u potrzebny!**
 
 ## Użycie
 
