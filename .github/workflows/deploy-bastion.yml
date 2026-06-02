@@ -133,9 +133,42 @@ jobs:
           
           echo "IMAGE_URI=$IMAGE_REPO:latest" >> $GITHUB_ENV
 
-      - name: Terraform Init
+      - name: Create S3 bucket for Terraform state (if not exists)
+        if: github.event.inputs.action == 'START'
+        run: |
+          BUCKET_NAME="secure-connect-gateway-tfstate"
+          REGION="eu-north-1"
+          
+          # Try to create bucket - if exists, will fail silently
+          aws s3api create-bucket \
+            --bucket "$BUCKET_NAME" \
+            --region "$REGION" \
+            --create-bucket-configuration LocationConstraint="$REGION" \
+            2>/dev/null || true
+          
+          # Enable versioning for safety
+          aws s3api put-bucket-versioning \
+            --bucket "$BUCKET_NAME" \
+            --versioning-configuration Status=Enabled \
+            2>/dev/null || true
+          
+          # Enable server-side encryption
+          aws s3api put-bucket-encryption \
+            --bucket "$BUCKET_NAME" \
+            --server-side-encryption-configuration '{
+              "Rules": [{
+                "ApplyServerSideEncryptionByDefault": {
+                  "SSEAlgorithm": "AES256"
+                }
+              }]
+            }' 2>/dev/null || true
+          
+          echo "✓ S3 bucket ready: $BUCKET_NAME"
+
+      - name: Terraform Init (with S3 backend + auto-migrate)
+        if: github.event.inputs.action == 'START'
         working-directory: ./terraform
-        run: terraform init
+        run: terraform init -migrate-state -auto-approve
 
       - name: Import existing resources into Terraform state
         if: github.event.inputs.action == 'START'

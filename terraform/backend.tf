@@ -14,7 +14,10 @@ terraform {
     }
   }
 
-  backend "local" {
-    path = "terraform.tfstate"
+  backend "s3" {
+    bucket         = "secure-connect-gateway-tfstate"
+    key            = "terraform.tfstate"
+    region         = "eu-north-1"
+    encrypt        = true
   }
 }
