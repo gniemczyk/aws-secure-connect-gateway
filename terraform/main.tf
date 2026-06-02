@@ -1,43 +1,46 @@
 # Główna konfiguracja Terraform dla efemerycznego bastionu ECS Fargate
 
+terraform {
+  required_version = ">= 1.0"
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.0"
+    }
+  }
+}
+
 provider "aws" {
   region = var.region
 }
 
-# --- Sieć ---
+# --- NETWORKING ---
 
-# Pobranie danych VPC
+# Get existing VPC
 data "aws_vpc" "selected" {
   id = var.vpc_id
 }
 
-# Pobranie wszystkich podsieci w VPC aby uniknąć kolizji CIDR
-data "aws_subnets" "existing" {
-  vpc_id = var.vpc_id
-}
-
-# Pobranie CIDR bloku VPC
-data "aws_vpc_cidr_block_associations" "vpc_cidrs" {
-  vpc_id = var.vpc_id
-}
-
-# Pobranie dostępnych stref dostępności
+# Get availability zones
 data "aws_availability_zones" "available" {
   state = "available"
 }
 
-# Losowy sufiks dla unikalności podsieci
+# Random suffix for unique subnet CIDR
 resource "random_id" "subnet_suffix" {
   byte_length = 2
 }
 
-# Tworzenie tymczasowej podsieci IPv4 wewnątrz VPC
-# Używamy losowego CIDR z zakresu VPC, unikając kolizji
+# Create temporary subnet for bastion
 resource "aws_subnet" "bastion_subnet" {
   vpc_id                  = var.vpc_id
   cidr_block              = cidrsubnet(data.aws_vpc.selected.cidr_block, 8, random_id.subnet_suffix.dec % 256)
-  availability_zone       = element(data.aws_availability_zones.available.names, 0)
-  map_public_ip_on_launch = true # Potrzebne dla dostępu do internetu (Serveo.net)
+  availability_zone       = data.aws_availability_zones.available.names[0]
+  map_public_ip_on_launch = true
 
   tags = {
     Name        = "${var.bastion_name}-subnet"
@@ -50,16 +53,13 @@ resource "aws_subnet" "bastion_subnet" {
   }
 }
 
-# Tymczasowa Security Group - zablokowany inbound, otwarty outbound
+# Security Group - inbound blocked, outbound SSH + DNS only
 resource "aws_security_group" "bastion_sg" {
   name_prefix = "${var.bastion_name}-sg-"
-  description = "Security Group dla efemerycznego bastionu - zablokowany inbound, otwarty outbound"
+  description = "Security Group for ephemeral bastion - blocked inbound, SSH+DNS outbound"
   vpc_id      = var.vpc_id
 
-  # Brak reguł inbound - całkowicie zablokowany
-  # To jest bezpieczne, bo kontener nie przyjmuje połączeń, tylko inicjuje tunel wychodzący
-
-  # Outbound - tylko SSH (port 22) dla połączenia z Serveo.net
+  # Outbound SSH (port 22) for Serveo.net tunnel
   egress {
     from_port   = 22
     to_port     = 22
@@ -67,7 +67,7 @@ resource "aws_security_group" "bastion_sg" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  # Outbound DNS (port 53) dla resolucji nazw
+  # Outbound DNS (port 53) for name resolution
   egress {
     from_port   = 53
     to_port     = 53
@@ -103,10 +103,10 @@ resource "aws_ecs_cluster" "bastion_cluster" {
   }
 }
 
-# CloudWatch Log Group dla kontenera
+# CloudWatch Log Group
 resource "aws_cloudwatch_log_group" "bastion_logs" {
   name              = "/ecs/${var.bastion_name}"
-  retention_in_days = 1 # Tylko 1 dzień retencji dla logów
+  retention_in_days = 1
 
   tags = {
     Environment = "ephemeral"
@@ -114,8 +114,8 @@ resource "aws_cloudwatch_log_group" "bastion_logs" {
   }
 }
 
-# IAM Role dla execution task (potrzebne do pobrania obrazu i wysyłania logów)
-data "aws_iam_policy_document" "ecs_task_execution_role" {
+# IAM Role for ECS Task Execution
+data "aws_iam_policy_document" "ecs_task_execution_role_assume" {
   statement {
     effect = "Allow"
 
@@ -130,7 +130,7 @@ data "aws_iam_policy_document" "ecs_task_execution_role" {
 
 resource "aws_iam_role" "ecs_task_execution_role" {
   name_prefix        = "${var.bastion_name}-exec-role-"
-  assume_role_policy = data.aws_iam_policy_document.ecs_task_execution_role.json
+  assume_role_policy = data.aws_iam_policy_document.ecs_task_execution_role_assume.json
 
   tags = {
     Environment = "ephemeral"
@@ -143,7 +143,12 @@ resource "aws_iam_role_policy_attachment" "ecs_task_execution_role_policy" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
-# Task Definition z maksymalnym hardeningiem
+# Random suffix for Serveo subdomain
+resource "random_id" "serveo_suffix" {
+  byte_length = 4
+}
+
+# ECS Task Definition (no task execution - workflow will run it on-demand)
 resource "aws_ecs_task_definition" "bastion_task" {
   family                   = "${var.bastion_name}-task"
   network_mode             = "awsvpc"
@@ -151,7 +156,7 @@ resource "aws_ecs_task_definition" "bastion_task" {
   cpu                      = "256"
   memory                   = "512"
   execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
-  task_role_arn            = aws_iam_role.ecs_task_execution_role.arn # Brak dodatkowych uprawnień
+  task_role_arn            = aws_iam_role.ecs_task_execution_role.arn
 
   container_definitions = jsonencode([
     {
@@ -159,17 +164,17 @@ resource "aws_ecs_task_definition" "bastion_task" {
       image     = var.container_image
       essential = true
 
-      # Maksymalne hardening bezpieczeństwa
-      readonlyRootFilesystem = true  # System plików całkowicie zablokowany do zapisu
-      disableNetworking      = false # Potrzebne dla połączenia z Serveo.net
+      # Security hardening
+      readonlyRootFilesystem = true
+      disableNetworking      = false
 
-      # Uruchomienie jako nieuprzywilejowany użytkownik
-      user = "65534:65534" # nobody user (UID 65534)
+      # Run as non-root user (nobody - UID 65534)
+      user = "65534:65534"
 
-      # Brak uprawnień do escalacji uprawnień
+      # No privilege escalation
       privileged = false
 
-      # Brak możliwości dodawania capabilities
+      # Drop all capabilities
       linuxParameters = {
         capabilities = {
           drop = ["ALL"]
@@ -178,10 +183,10 @@ resource "aws_ecs_task_definition" "bastion_task" {
         devices = []
       }
 
-      # Tylko niezbędne mounty (tmpfs dla /tmp jeśli potrzebne)
+      # No mount points
       mountPoints = []
 
-      # Logi do CloudWatch
+      # CloudWatch Logs
       logConfiguration = {
         logDriver = "awslogs"
         options = {
@@ -191,7 +196,7 @@ resource "aws_ecs_task_definition" "bastion_task" {
         }
       }
 
-      # Zmienne środowiskowe dla tunelu Serveo.net
+      # Environment variables
       environment = [
         {
           name  = "SERVEO_SUBDOMAIN"
@@ -199,35 +204,10 @@ resource "aws_ecs_task_definition" "bastion_task" {
         }
       ]
 
-      # Brak sekretów
+      # No secrets
       secrets = []
     }
   ])
-
-  tags = {
-    Environment = "ephemeral"
-    ManagedBy   = "terraform"
-  }
-}
-
-# Losowy sufiks dla unikalności nazwy tunelu
-resource "random_id" "serveo_suffix" {
-  byte_length = 4
-}
-
-# Uruchomienie pojedynczego tasku (nie Service, tylko Task dla efemeryczności)
-resource "aws_ecs_task" "bastion_task" {
-  cluster         = aws_ecs_cluster.bastion_cluster.arn
-  task_definition = aws_ecs_task_definition.bastion_task.arn
-  launch_type     = "FARGATE"
-
-  network_configuration {
-    subnets          = [aws_subnet.bastion_subnet.id]
-    security_groups  = [aws_security_group.bastion_sg.id]
-    assign_public_ip = true # Potrzebne dla połączenia z Serveo.net
-  }
-
-  depends_on = [aws_iam_role_policy_attachment.ecs_task_execution_role_policy]
 
   tags = {
     Environment = "ephemeral"

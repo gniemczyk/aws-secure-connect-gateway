@@ -96,20 +96,43 @@ jobs:
         id: terraform-outputs
         run: |
           CLUSTER_NAME=$(terraform output -raw cluster_name)
-          TASK_ID=$(terraform output -raw task_id)
+          CLUSTER_ARN=$(terraform output -raw cluster_arn)
+          TASK_DEF_ARN=$(terraform output -raw task_definition_arn)
+          SUBNET_ID=$(terraform output -raw subnet_id)
+          SG_ID=$(terraform output -raw security_group_id)
           LOG_GROUP=$(terraform output -raw log_group_name)
           SERVEO_SUBDOMAIN=$(terraform output -raw serveo_subdomain)
           
           echo "cluster_name=$CLUSTER_NAME" >> $GITHUB_OUTPUT
-          echo "task_id=$TASK_ID" >> $GITHUB_OUTPUT
+          echo "cluster_arn=$CLUSTER_ARN" >> $GITHUB_OUTPUT
+          echo "task_def_arn=$TASK_DEF_ARN" >> $GITHUB_OUTPUT
+          echo "subnet_id=$SUBNET_ID" >> $GITHUB_OUTPUT
+          echo "sg_id=$SG_ID" >> $GITHUB_OUTPUT
           echo "log_group=$LOG_GROUP" >> $GITHUB_OUTPUT
           echo "serveo_subdomain=$SERVEO_SUBDOMAIN" >> $GITHUB_OUTPUT
+
+      - name: Run ECS Task (START)
+        if: github.event.inputs.action == 'START'
+        id: run-task
+        run: |
+          TASK_RESPONSE=$(aws ecs run-task \
+            --cluster ${{ steps.terraform-outputs.outputs.cluster_arn }} \
+            --task-definition ${{ steps.terraform-outputs.outputs.task_def_arn }} \
+            --network-configuration "awsvpcConfiguration={subnets=[${{ steps.terraform-outputs.outputs.subnet_id }}],securityGroups=[${{ steps.terraform-outputs.outputs.sg_id }}],assignPublicIp=ENABLED}" \
+            --launch-type FARGATE \
+            --region ${{ env.AWS_REGION }})
+          
+          TASK_ARN=$(echo $TASK_RESPONSE | jq -r '.tasks[0].taskArn')
+          TASK_ID=$(echo $TASK_ARN | awk -F'/' '{print $NF}')
+          
+          echo "task_id=$TASK_ID" >> $GITHUB_OUTPUT
+          echo "Task started: $TASK_ID"
 
       - name: Oczekiwanie na uruchomienie tasku i pobranie logów
         if: github.event.inputs.action == 'START'
         run: |
           CLUSTER_NAME=${{ steps.terraform-outputs.outputs.cluster_name }}
-          TASK_ID=${{ steps.terraform-outputs.outputs.task_id }}
+          TASK_ID=${{ steps.run-task.outputs.task_id }}
           LOG_GROUP=${{ steps.terraform-outputs.outputs.log_group }}
           
           echo "Oczekiwanie na uruchomienie tasku ECS..."
@@ -126,6 +149,7 @@ jobs:
             STATUS=$(aws ecs describe-tasks \
               --cluster "$CLUSTER_NAME" \
               --tasks "$TASK_ID" \
+              --region ${{ env.AWS_REGION }} \
               --query 'tasks[0].lastStatus' \
               --output text 2>/dev/null || echo "ERROR")
             
@@ -178,6 +202,35 @@ jobs:
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "⚠️ **Uwaga:** URL jest ważny tylko dopóki task jest uruchomiony." >> $GITHUB_STEP_SUMMARY
+
+      - name: Stop running ECS Task (STOP)
+        if: github.event.inputs.action == 'STOP'
+        run: |
+          # Get running tasks
+          TASKS=$(aws ecs list-tasks \
+            --cluster ${{ vars.VPC_ID }} \
+            --region ${{ env.AWS_REGION }} \
+            --query 'taskArns[]' \
+            --output text 2>/dev/null || echo "")
+          
+          if [ -z "$TASKS" ]; then
+            echo "No running tasks found"
+            exit 0
+          fi
+          
+          # Stop each task
+          for TASK_ARN in $TASKS; do
+            echo "Stopping task: $TASK_ARN"
+            aws ecs stop-task \
+              --cluster ${{ vars.VPC_ID }} \
+              --task $TASK_ARN \
+              --region ${{ env.AWS_REGION }} || true
+          done
+
+      - name: Terraform Init (STOP)
+        if: github.event.inputs.action == 'STOP'
+        working-directory: ./terraform
+        run: terraform init
 
       - name: Terraform Destroy (STOP)
         if: github.event.inputs.action == 'STOP'
