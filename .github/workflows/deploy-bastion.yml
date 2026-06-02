@@ -115,7 +115,7 @@ jobs:
       - name: Skanowanie obrazu na podatności (Trivy)
         if: github.event.inputs.action == 'START'
         run: |
-          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin v0.51.0
           echo "Skanowanie obrazu na podatności..."
           /usr/local/bin/trivy image --exit-code 0 --severity HIGH,CRITICAL --no-progress bastion
 
