@@ -1,0 +1,157 @@
+name: Efemeryczny Bastion ECS Fargate
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Akcja do wykonania'
+        required: true
+        type: choice
+        options:
+          - START
+          - STOP
+      serveo_subdomain:
+        description: 'Opcjonalna subdomena Serveo.net (pozostaw puste dla losowej)'
+        required: false
+        type: string
+        default: ''
+
+env:
+  AWS_REGION: 'eu-central-1'
+  TERRAFORM_VERSION: '1.5.7'
+
+jobs:
+  deploy:
+    name: 'Zarządzanie Bastionem'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout repozytorium
+        uses: actions/checkout@v4
+
+      - name: Konfiguracja AWS credentials przez OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Instalacja Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+      - name: Logowanie do Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Budowanie i push obrazu Docker (tylko dla START)
+        if: github.event.inputs.action == 'START'
+        run: |
+          # Zbuduj obraz
+          docker build -t bastion .
+          
+          # Tagowanie dla ECR
+          IMAGE_URI=${{ steps.login-ecr.outputs.registry }}/bastion:${{ github.sha }}
+          docker tag bastion $IMAGE_URI
+          
+          # Push do ECR
+          docker push $IMAGE_URI
+          
+          # Zapisz URI jako output
+          echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_OUTPUT
+
+      - name: Terraform Init
+        working-directory: ./terraform
+        run: terraform init
+
+      - name: Terraform Apply (START)
+        if: github.event.inputs.action == 'START'
+        working-directory: ./terraform
+        run: |
+          terraform apply \
+            -auto-approve \
+            -var="vpc_id=${{ vars.VPC_ID }}" \
+            -var="region=${{ env.AWS_REGION }}" \
+            -var="container_image=${{ steps.login-ecr.outputs.registry }}/bastion:${{ github.sha }}" \
+            -var="serveo_subdomain=${{ github.event.inputs.serveo_subdomain }}"
+
+      - name: Pobranie outputów Terraform
+        if: github.event.inputs.action == 'START'
+        working-directory: ./terraform
+        id: terraform-outputs
+        run: |
+          CLUSTER_NAME=$(terraform output -raw cluster_name)
+          TASK_ID=$(terraform output -raw task_id)
+          LOG_GROUP=$(terraform output -raw log_group_name)
+          SERVEO_SUBDOMAIN=$(terraform output -raw serveo_subdomain)
+          
+          echo "cluster_name=$CLUSTER_NAME" >> $GITHUB_OUTPUT
+          echo "task_id=$TASK_ID" >> $GITHUB_OUTPUT
+          echo "log_group=$LOG_GROUP" >> $GITHUB_OUTPUT
+          echo "serveo_subdomain=$SERVEO_SUBDOMAIN" >> $GITHUB_OUTPUT
+
+      - name: Oczekiwanie na uruchomienie tasku i pobranie logów
+        if: github.event.inputs.action == 'START'
+        run: |
+          echo "Oczekiwanie na uruchomienie tasku ECS..."
+          sleep 45
+          
+          # Pobierz logi z CloudWatch
+          LOG_GROUP=${{ steps.terraform-outputs.outputs.log_group }}
+          
+          echo "Pobieranie logów z grupy: $LOG_GROUP"
+          
+          # Pobierz ostatnie logi używając filter-log-events
+          aws logs filter-log-events \
+            --log-group-name "$LOG_GROUP" \
+            --start-time $(($(date +%s) * 1000 - 300000)) \
+            --filter-pattern "serveo" \
+            --max-events 50 \
+            --query 'events[*].[message]' \
+            --output text > /tmp/serveo_logs.txt || true
+          
+          echo "=== Logi z CloudWatch ==="
+          cat /tmp/serveo_logs.txt
+
+      - name: Wyświetlenie URL Serveo.net w GitHub Summary
+        if: github.event.inputs.action == 'START'
+        run: |
+          SERVEO_SUBDOMAIN=${{ steps.terraform-outputs.outputs.serveo_subdomain }}
+          SERVEO_URL="https://${SERVEO_SUBDOMAIN}.serveo.net"
+          
+          echo "## 🔗 Bastion URL" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Połącz się z bastionem używając:" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "ssh ${SERVEO_URL}" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**URL tunelu:** $SERVEO_URL" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "⚠️ **Uwaga:** URL jest ważny tylko dopóki task jest uruchomiony." >> $GITHUB_STEP_SUMMARY
+
+      - name: Terraform Destroy (STOP)
+        if: github.event.inputs.action == 'STOP'
+        working-directory: ./terraform
+        run: |
+          terraform destroy \
+            -auto-approve \
+            -var="vpc_id=${{ vars.VPC_ID }}" \
+            -var="region=${{ env.AWS_REGION }}" \
+            -var="container_image=dummy" \
+            -var="serveo_subdomain=dummy"
+
+      - name: Potwierdzenie usunięcia (STOP)
+        if: github.event.inputs.action == 'STOP'
+        run: |
+          echo "## ✅ Bastion usunięty" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Wszystkie zasoby zostały bezpiecznie usunięte:" >> $GITHUB_STEP_SUMMARY
+          echo "- ECS Task zatrzymany" >> $GITHUB_STEP_SUMMARY
+          echo "- Tymczasowa podsieć usunięta" >> $GITHUB_STEP_SUMMARY
+          echo "- Security Group usunięta" >> $GITHUB_STEP_SUMMARY
+          echo "- ECS Cluster usunięty" >> $GITHUB_STEP_SUMMARY
