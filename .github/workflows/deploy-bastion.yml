@@ -144,9 +144,12 @@ jobs:
           CLUSTER_NAME="ephemeral-bastion-cluster"
           SERVICE_NAME="ephemeral-bastion-service"
           
-          # Try to import existing service - if it exists, add to state
-          # If it doesn't exist, import fails silently (|| true)
+          # Import existing service with variables (if it exists, add to state)
           terraform import \
+            -var="vpc_id=${{ vars.VPC_ID }}" \
+            -var="region=${{ env.AWS_REGION }}" \
+            -var="container_image=${{ env.IMAGE_URI }}" \
+            -var="serveo_subdomain=${{ github.event.inputs.serveo_subdomain }}" \
             aws_ecs_service.bastion_service \
             "$CLUSTER_NAME/$SERVICE_NAME" 2>/dev/null || true
           
