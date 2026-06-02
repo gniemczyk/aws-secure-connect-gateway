@@ -52,6 +52,6 @@ output "serveo_subdomain" {
 
 output "service_name" {
   description = "ECS Service name (pilnuje aby zawsze był 1 task)"
-  value       = aws_ecs_service.bastion_service.name
+  value       = local.service_name
 }
 
