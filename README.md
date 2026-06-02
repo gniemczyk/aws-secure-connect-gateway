@@ -29,9 +29,19 @@ Bezpieczny, efemeryczny bastion SSH oparty na AWS ECS Fargate z autoryzacją Git
 
 ## Wymagania Wstępne - QUICK START
 
-### 1. GitHub Secrets - 1 minute setup
+### 0. AWS Setup - ECR Repository
+Utwórz prywatne ECR repository w Twoim regionie:
+
+```bash
+aws ecr create-repository \
+  --repository-name secure-connect-gateway \
+  --region eu-north-1
+```
+
+### 1. GitHub Secrets - 2 minutes setup
 Ustaw w repozytorium GitHub (Settings → Secrets and variables → Actions → Secrets):
 - `AWS_ROLE_ARN`: Twoja rola IAM ARN (np. `arn:aws:iam::837175765719:role/github-actions-role`)
+- `AWS_ACCOUNT_ID`: Twój AWS Account ID (np. `837175765719`)
 
 ### 2. GitHub Variables - 1 minute setup  
 Ustaw w repozytorium GitHub (Settings → Secrets and variables → Actions → Variables):
@@ -81,32 +91,28 @@ Skonfiguruj OIDC w AWS (one-time setup):
 
 4. **Skopiuj ARN roli** i ustaw jako `AWS_ROLE_ARN` w GitHub Secrets
 
-### Docker Image - GitHub Container Registry (GHCR)
+### Docker Image - Amazon ECR
 
-⚠️ **Ważne:** Workflow builduje i pushuje obraz do **GitHub Container Registry (GHCR)**, nie do AWS ECR!
+⚠️ **Ważne:** Workflow builduje i pushuje obraz do **AWS ECR** (Elastic Container Registry), a ECS Fargate pobiera obraz z ECR.
 
 ```
-Obraz jest dostępny w: ghcr.io/YOUR_USERNAME/secure-connect-gateway/bastion:SHA
+Obraz jest umieszczany w: AWS ECR w Twoim regionie
+Repozytorium: secure-connect-gateway
+Tag: SHA commit (np. bbab573c7527)
 ```
 
-**Przykład:**
-```
-ghcr.io/gniemczyk/secure-connect-gateway/bastion:bbab573c7527
-```
+**Gdzie znaleźć obraz:**
+1. AWS Console → ECR (w regionie `vars.AWS_REGION`)
+2. Repozytorium: `secure-connect-gateway`
+3. Tag: commit SHA (np. `bbab573c7527`)
+4. Full URI: `837175765719.dkr.ecr.eu-north-1.amazonaws.com/secure-connect-gateway:bbab573c7527`
 
-**Gdzie szukać obrazu:**
-1. GitHub → Settings → Packages
-2. Lub: https://github.com/settings/packages
-3. Obraz jest **prywatny** (na poziomie repozytorium)
-
-**Uwaga:** To nie jest AWS ECR! Obraz jest przechowywany na serwerach GitHub, nie AWS.
-
-**Dlaczego GHCR zamiast ECR?**
-- ✅ Bezpłatny (GitHub native)
-- ✅ Brak konfiguracji
-- ✅ Auto-cleanup starych image'ów
-- ✅ GitHub Token już dostępny (zero setup)
-- ✅ Prywatny domyślnie
+**Dlaczego ECR zamiast GitHub Container Registry?**
+- ✅ Native do AWS (ECS może pobierać bez dodatkowej konfiguracji)
+- ✅ Prywatny (bezpieczny dla bastionu)
+- ✅ Łatwa integracja z ECS
+- ✅ Koszt: ~$0.50/miesiąc za storage
+- ✅ GHCR byłby prywatny i ECS nie miałby dostępu bez dodatkowego setupu
 
 ## Użycie
 
