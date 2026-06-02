@@ -25,7 +25,7 @@ echo "=========================================="
 
 ssh -R "${SERVEO_SUBDOMAIN}:80:localhost:22" \
     -o StrictHostKeyChecking=accept-new \
-    -o UserKnownHostsFile=/tmp/serveo_known_hosts \
+    -o UserKnownHostsFile=/dev/null \
     -o ServerAliveInterval=60 \
     -o ServerAliveCountMax=3 \
     -o ExitOnForwardFailure=yes \
