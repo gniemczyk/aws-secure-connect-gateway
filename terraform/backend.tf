@@ -14,10 +14,8 @@ terraform {
     }
   }
 
+  # Backend configured via -backend-config flags in workflow
+  # (allows dynamic region from GitHub variables)
   backend "s3" {
-    bucket         = "secure-connect-gateway-tfstate"
-    key            = "terraform.tfstate"
-    region         = "eu-north-1"
-    encrypt        = true
   }
 }

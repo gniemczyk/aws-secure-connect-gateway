@@ -168,7 +168,14 @@ jobs:
       - name: Terraform Init (with S3 backend + auto-migrate)
         if: github.event.inputs.action == 'START'
         working-directory: ./terraform
-        run: terraform init -migrate-state -auto-approve
+        run: |
+          terraform init \
+            -backend-config="bucket=secure-connect-gateway-tfstate" \
+            -backend-config="key=terraform.tfstate" \
+            -backend-config="region=${{ env.AWS_REGION }}" \
+            -backend-config="encrypt=true" \
+            -migrate-state \
+            -auto-approve
 
       - name: Import existing resources into Terraform state
         if: github.event.inputs.action == 'START'
