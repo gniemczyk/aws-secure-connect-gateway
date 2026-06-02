@@ -20,6 +20,11 @@ output "subnet_id" {
   value       = aws_subnet.bastion_subnet.id
 }
 
+output "subnet_cidr" {
+  description = "Subnet CIDR block (automatically selected from available range)"
+  value       = aws_subnet.bastion_subnet.cidr_block
+}
+
 output "security_group_id" {
   description = "Security Group ID"
   value       = aws_security_group.bastion_sg.id

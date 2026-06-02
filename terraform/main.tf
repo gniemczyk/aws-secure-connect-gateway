@@ -11,20 +11,49 @@ data "aws_vpc" "selected" {
   id = var.vpc_id
 }
 
+# Get ALL existing subnets in VPC (to detect used CIDRs)
+data "aws_subnets" "existing" {
+  filter {
+    name   = "vpc-id"
+    values = [var.vpc_id]
+  }
+}
+
+# Get details of existing subnets
+data "aws_subnet" "existing" {
+  for_each = toset(data.aws_subnets.existing.ids)
+  id       = each.value
+}
+
 # Get availability zones
 data "aws_availability_zones" "available" {
   state = "available"
 }
 
-# Random suffix for unique subnet CIDR
-resource "random_id" "subnet_suffix" {
-  byte_length = 2
+# Find first available CIDR block that doesn't conflict
+# Algorithm:
+# 1. VPC CIDR = 10.0.0.0/16
+# 2. Existing subnets occupy specific /24s (e.g., 10.0.1.0/24, 10.0.2.0/24)
+# 3. Find first /24 index (0-255) that is NOT used
+# 4. Create new subnet with that /24
+locals {
+  vpc_cidr       = data.aws_vpc.selected.cidr_block
+  existing_cidrs = toset([for subnet in data.aws_subnet.existing : subnet.cidr_block])
+  
+  # Try CIDR blocks from 10.0.0.0/24 to 10.0.255.0/24
+  # Find first one NOT in existing_cidrs
+  available_subnet_index = range(0, 256)[index(
+    [for idx in range(0, 256) : true if !contains(local.existing_cidrs, cidrsubnet(local.vpc_cidr, 8, idx))],
+    true
+  )]
+  
+  new_subnet_cidr = cidrsubnet(local.vpc_cidr, 8, local.available_subnet_index)
 }
 
 # Create temporary subnet for bastion
 resource "aws_subnet" "bastion_subnet" {
   vpc_id                  = var.vpc_id
-  cidr_block              = cidrsubnet(data.aws_vpc.selected.cidr_block, 8, random_id.subnet_suffix.dec % 256)
+  cidr_block              = local.new_subnet_cidr
   availability_zone       = data.aws_availability_zones.available.names[0]
   map_public_ip_on_launch = true
 
