@@ -65,6 +65,33 @@ jobs:
             --encryption-configuration encryptionType=AES256 \
             --image-scanning-configuration scanOnPush=true
 
+      - name: Set ECR Lifecycle Policy (keep only latest images)
+        if: github.event.inputs.action == 'START'
+        run: |
+          cat > /tmp/lifecycle-policy.json << 'EOF'
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Keep only latest 2 images",
+                "selection": {
+                  "tagStatus": "any",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 2
+                },
+                "action": {
+                  "type": "expire"
+                }
+              }
+            ]
+          }
+          EOF
+          
+          aws ecr put-lifecycle-policy \
+            --repository-name ${{ env.ECR_REPOSITORY }} \
+            --lifecycle-policy-text file:///tmp/lifecycle-policy.json \
+            --region ${{ env.AWS_REGION }} 2>/dev/null || true
+
       - name: Build Docker image (START)
         if: github.event.inputs.action == 'START'
         run: |
@@ -81,10 +108,17 @@ jobs:
         if: github.event.inputs.action == 'START'
         run: |
           REGISTRY=${{ steps.login-ecr.outputs.registry }}
-          IMAGE_TAG=$REGISTRY/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
-          docker tag bastion $IMAGE_TAG
-          docker push $IMAGE_TAG
-          echo "IMAGE_URI=$IMAGE_TAG" >> $GITHUB_ENV
+          IMAGE_REPO=$REGISTRY/${{ env.ECR_REPOSITORY }}
+          
+          # Push z tagiem 'latest' (overwrite zawsze ten sam tag)
+          docker tag bastion $IMAGE_REPO:latest
+          docker push $IMAGE_REPO:latest
+          
+          # Opcjonalnie: push z commit SHA dla historii (ale lifecycle policy usunie stare)
+          docker tag bastion $IMAGE_REPO:${{ github.sha }}
+          docker push $IMAGE_REPO:${{ github.sha }}
+          
+          echo "IMAGE_URI=$IMAGE_REPO:latest" >> $GITHUB_ENV
 
       - name: Terraform Init
         working-directory: ./terraform
