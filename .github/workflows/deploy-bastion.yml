@@ -163,15 +163,25 @@ jobs:
           TASK_ID=$(echo "$TASK_ARN" | awk -F'/' '{print $NF}')
           echo "task_id=$TASK_ID" >> $GITHUB_OUTPUT
 
-          # Verify ECS Exec works
-          echo "Sprawdzanie ECS Exec..."
-          sleep 10
-          aws ecs execute-command \
-            --cluster "$CLUSTER" \
-            --task "$TASK_ID" \
-            --interactive \
-            --command "echo OK" \
-            --region ${{ env.AWS_REGION }} > /dev/null 2>&1 || echo "ECS Exec moze potrzebowac chwili..."
+          # Czekanie na SSM agent (ECS Exec wymaga 30-60s)
+          echo "Czekanie 60s na polaczenie SSM agent..."
+          sleep 60
+
+          # Retry ECS Exec
+          for attempt in 1 2 3; do
+            echo "Proba ECS Exec #${attempt}..."
+            if aws ecs execute-command \
+              --cluster "$CLUSTER" \
+              --task "$TASK_ID" \
+              --interactive \
+              --command "echo CONNECTED" \
+              --region ${{ env.AWS_REGION }} 2>&1 | grep -q "CONNECTED"; then
+              echo "ECS Exec dziala!"
+              break
+            fi
+            echo "Jeszcze nie gotowy, czekam 15s..."
+            sleep 15
+          done
 
       - name: Podsumowanie
         if: github.event.inputs.action == 'START' && success()

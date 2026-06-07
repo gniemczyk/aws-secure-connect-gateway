@@ -274,6 +274,7 @@ resource "aws_ecs_service" "bastion_service" {
   task_definition = aws_ecs_task_definition.bastion_task.arn
   desired_count   = 1
   launch_type     = "FARGATE"
+  platform_version = "LATEST"
 
   # ECS Exec - pozwala na polaczenie przez aws ecs execute-command
   enable_execute_command = true
