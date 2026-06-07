@@ -120,6 +120,70 @@ dig internal-service.local
 ncat -zv 10.0.1.50 3306
 ```
 
+### Tunelowanie połączeń
+
+#### 1. Bezpośredni dostęp z poziomu bastionu
+
+W otwartej sesji bastionu możesz bezpośrednio łączyć się do zasobów VPC używając preinstalowanych klientów:
+
+```bash
+# PostgreSQL
+psql -h mydb.abc123.eu-north-1.rds.amazonaws.com -U admin -d mydb
+
+# MySQL
+mysql -h mydb.abc123.eu-north-1.rds.amazonaws.com -u admin -p mydb
+
+# Redis/ElastiCache
+redis-cli -h cache.abc123.ng.0001.eun1.cache.amazonaws.com -p 6379
+
+# Sprawdzenie łączności do API wewnętrznego
+curl http://internal-service.local:8080/health
+```
+
+#### 2. Port forwarding wewnątrz bastionu za pomocą socat
+
+Jeśli chcesz dostęp z innych procesów w bastionie, użyj `socat` do forwarda portów:
+
+```bash
+# Forward port RDS na localhost:5432 wewnątrz bastionu
+socat TCP-LISTEN:5432,reuseaddr,fork TCP:mydb.abc123.eu-north-1.rds.amazonaws.com:5432 &
+
+# Teraz sprawdź dostęp z innego shella w tym bastionie
+ncat -zv 127.0.0.1 5432
+
+# Łączenie się przez localhost
+psql -h 127.0.0.1 -U admin -d mydb
+```
+
+#### 3. SSH Port Forwarding z lokalnego komputera
+
+Jeśli chcesz tunelować dostęp z Twojego komputera do bastionu, użyj SSH tunneling przez SSM Session Manager.
+
+Najpierw przygotuj SSM Session Manager do port forwardingu (install session-manager-plugin na Twoim komputerze):
+
+```bash
+# Na swoim komputerze - utwórz SSH tunnel przez SSM Session Manager
+aws ssm start-session --target i-1234567890abcdef0 \
+  --document-name AWS-StartPortForwardingSession \
+  --parameters "localPortNumber=5432,portNumber=5432,host=mydb.abc123.eu-north-1.rds.amazonaws.com"
+
+# Wtedy w innym terminalu łącz się do RDS przez localhost:5432
+psql -h localhost -U admin -d mydb
+```
+
+Lub jeśli bastion ma SSH dostęp (z Elastic IP):
+
+```bash
+# Na swoim komputerze - SSH tunnel
+ssh -L 5432:mydb.abc123.eu-north-1.rds.amazonaws.com:5432 \
+    -i your_key user@bastion-public-ip
+
+# Wtedy łącz się do RDS przez localhost
+psql -h localhost -U admin -d mydb
+```
+
+**Dostępne narzędzia w bastionie:** `socat`, `ncat`, `curl`, `dig`, `psql`, `mysql`, `redis-cli`
+
 ## Struktura projektu
 
 ```

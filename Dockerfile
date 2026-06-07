@@ -9,6 +9,10 @@ RUN apk add --no-cache \
     openssh-client \
     nmap-ncat \
     jq \
+    socat \
+    postgresql-client \
+    mysql-client \
+    redis \
     && rm -rf /var/cache/apk/*
 
 # Kopiowanie skryptu startowego
