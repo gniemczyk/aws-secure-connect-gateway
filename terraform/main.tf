@@ -261,14 +261,9 @@ resource "aws_iam_role_policy_attachment" "ecs_task_execution_role_policy" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
-# Random suffix for Serveo subdomain (stable across applies)
-resource "random_id" "serveo_suffix" {
-  byte_length = 4
-}
-
-# Computed subdomain
+# Computed subdomain (passed from workflow, always fresh random)
 locals {
-  serveo_subdomain = var.serveo_subdomain != "" ? var.serveo_subdomain : "${var.bastion_name}-${random_id.serveo_suffix.hex}"
+  serveo_subdomain = var.serveo_subdomain
 }
 
 # ECS Task Definition

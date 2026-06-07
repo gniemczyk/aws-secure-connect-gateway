@@ -41,12 +41,11 @@ variable "container_image" {
 }
 
 variable "serveo_subdomain" {
-  description = "Serveo.net subdomain for tunnel (random if empty)"
+  description = "Serveo.net subdomain for tunnel (generated randomly by workflow each run)"
   type        = string
-  default     = ""
 
   validation {
-    condition     = var.serveo_subdomain == "" || (can(regex("^[a-z0-9-]+$", var.serveo_subdomain)) && length(var.serveo_subdomain) <= 63)
+    condition     = can(regex("^[a-z0-9-]+$", var.serveo_subdomain)) && length(var.serveo_subdomain) <= 63
     error_message = "Subdomain can contain only lowercase letters, numbers and hyphens, max 63 characters"
   }
 }

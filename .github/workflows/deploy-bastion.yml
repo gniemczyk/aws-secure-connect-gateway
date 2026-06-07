@@ -110,6 +110,20 @@ jobs:
         run: |
           docker build -t bastion .
 
+      - name: Generate random subdomain
+        if: github.event.inputs.action == 'START'
+        id: subdomain
+        run: |
+          INPUT_SUBDOMAIN="${{ github.event.inputs.serveo_subdomain }}"
+          if [ -n "$INPUT_SUBDOMAIN" ]; then
+            echo "subdomain=$INPUT_SUBDOMAIN" >> $GITHUB_OUTPUT
+          else
+            # Losowa subdomena przy KAZDYM uruchomieniu (bezpieczenstwo)
+            RANDOM_SUF=$(openssl rand -hex 6)
+            echo "subdomain=bastion-${RANDOM_SUF}" >> $GITHUB_OUTPUT
+          fi
+          echo "Subdomena: $(cat $GITHUB_OUTPUT | grep subdomain | cut -d= -f2)"
+
       - name: Skanowanie obrazu na podatnosci (Trivy)
         if: github.event.inputs.action == 'START'
         uses: aquasecurity/trivy-action@master
@@ -183,12 +197,15 @@ jobs:
           CLUSTER_NAME="${{ env.BASTION_NAME }}-cluster"
           SERVICE_NAME="${{ env.BASTION_NAME }}-service"
 
+          # Remove random_id from state if exists (no longer used)
+          terraform state rm random_id.serveo_suffix 2>/dev/null || true
+
           # Import IAM role (if it exists from previous run)
           terraform import \
             -var="vpc_id=${{ vars.VPC_ID }}" \
             -var="region=${{ env.AWS_REGION }}" \
             -var="container_image=${{ env.IMAGE_URI }}" \
-            -var="serveo_subdomain=${{ github.event.inputs.serveo_subdomain }}" \
+            -var="serveo_subdomain=${{ steps.subdomain.outputs.subdomain }}" \
             aws_iam_role.ecs_task_execution_role \
             "$ROLE_NAME" 2>/dev/null || true
 
@@ -197,7 +214,7 @@ jobs:
             -var="vpc_id=${{ vars.VPC_ID }}" \
             -var="region=${{ env.AWS_REGION }}" \
             -var="container_image=${{ env.IMAGE_URI }}" \
-            -var="serveo_subdomain=${{ github.event.inputs.serveo_subdomain }}" \
+            -var="serveo_subdomain=${{ steps.subdomain.outputs.subdomain }}" \
             aws_ecs_cluster.bastion_cluster \
             "$CLUSTER_NAME" 2>/dev/null || true
 
@@ -206,7 +223,7 @@ jobs:
             -var="vpc_id=${{ vars.VPC_ID }}" \
             -var="region=${{ env.AWS_REGION }}" \
             -var="container_image=${{ env.IMAGE_URI }}" \
-            -var="serveo_subdomain=${{ github.event.inputs.serveo_subdomain }}" \
+            -var="serveo_subdomain=${{ steps.subdomain.outputs.subdomain }}" \
             aws_ecs_service.bastion_service \
             "${CLUSTER_NAME}/${SERVICE_NAME}" 2>/dev/null || true
 
@@ -215,7 +232,7 @@ jobs:
             -var="vpc_id=${{ vars.VPC_ID }}" \
             -var="region=${{ env.AWS_REGION }}" \
             -var="container_image=${{ env.IMAGE_URI }}" \
-            -var="serveo_subdomain=${{ github.event.inputs.serveo_subdomain }}" \
+            -var="serveo_subdomain=${{ steps.subdomain.outputs.subdomain }}" \
             aws_cloudwatch_log_group.bastion_logs \
             "/ecs/${{ env.BASTION_NAME }}" 2>/dev/null || true
 
@@ -230,7 +247,7 @@ jobs:
             -var="vpc_id=${{ vars.VPC_ID }}" \
             -var="region=${{ env.AWS_REGION }}" \
             -var="container_image=${{ env.IMAGE_URI }}" \
-            -var="serveo_subdomain=${{ github.event.inputs.serveo_subdomain }}"
+            -var="serveo_subdomain=${{ steps.subdomain.outputs.subdomain }}"
           terraform apply tfplan
 
       - name: Pobranie outputow Terraform
@@ -412,20 +429,21 @@ jobs:
 
           | Parametr | Wartosc |
           |----------|---------|
-          | Subdomena | \`${SERVEO_SUBDOMAIN}\` |
-          | Polecenie SSH | \`ssh -J serveo.net root@${SERVEO_SUBDOMAIN}\` |
+          | Host | \`${SERVEO_SUBDOMAIN}.serveo.net\` |
+          | Port | \`80\` |
+          | Polecenie SSH | \`ssh -p 80 root@${SERVEO_SUBDOMAIN}.serveo.net\` |
           | Task ID | \`${TASK_ID}\` |
 
           ### Polecenie SSH (skopiuj i wklej)
 
           \`\`\`bash
-          ssh -J serveo.net root@${SERVEO_SUBDOMAIN}
+          ssh -p 80 root@${SERVEO_SUBDOMAIN}.serveo.net
           \`\`\`
 
           ### Wazne informacje
 
           - Task uruchomiony i stabilny (ECS Service utrzymuje dokladnie 1 task)
-          - Polaczenie przez Serveo.net jako SSH Jump Host
+          - Polaczenie: Twoj SSH -> serveo.net:80 -> tunel -> kontener:22 (sshd)
           - Aby zatrzymac: uruchom workflow z akcja STOP
 
           ### Troubleshooting

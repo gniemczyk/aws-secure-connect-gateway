@@ -42,5 +42,5 @@ output "service_name" {
 
 output "connection_command" {
   description = "SSH command to connect to bastion"
-  value       = "ssh -J serveo.net root@${local.serveo_subdomain}"
+  value       = "ssh -p 80 root@${local.serveo_subdomain}.serveo.net"
 }

@@ -70,11 +70,12 @@ fi
 
 echo "=========================================="
 echo " Łączenie z Serveo.net..."
-echo " Oczekiwany URL: ssh -J serveo.net root@${SERVEO_SUBDOMAIN}"
+echo " URL: ssh -p 80 root@${SERVEO_SUBDOMAIN}.serveo.net"
 echo "=========================================="
 
 # Uruchomienie tunelu SSH do serveo.net
-# -R: reverse tunnel - przekazuje ruch z serveo.net na localhost:22 (nasz sshd)
+# -R subdomain:80:localhost:22 - Serveo nasłuchuje na subdomain.serveo.net:80
+#    i przekierowuje ruch TCP na nasz localhost:22 (sshd)
 # -i: klucz klienta (potrzebny do rezerwacji subdomeny)
 # -o StrictHostKeyChecking=accept-new: akceptuje klucz serveo przy pierwszym połączeniu
 # -o UserKnownHostsFile=/dev/null: nie zapisuje known_hosts (ephemeral)
@@ -84,7 +85,7 @@ echo "=========================================="
 # -N: nie uruchamia shell na zdalnym serwerze
 # -T: nie przydziela pseudo-terminala
 
-exec ssh -R "${SERVEO_SUBDOMAIN}:22:localhost:22" \
+exec ssh -R "${SERVEO_SUBDOMAIN}:80:localhost:22" \
     -i "$SERVEO_KEY" \
     -o StrictHostKeyChecking=accept-new \
     -o UserKnownHostsFile=/dev/null \
