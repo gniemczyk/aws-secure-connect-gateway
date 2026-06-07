@@ -46,7 +46,13 @@ variable "serveo_subdomain" {
   default     = ""
 
   validation {
-    condition     = var.serveo_subdomain == "" || can(regex("^[a-z0-9-]+$", var.serveo_subdomain)) && length(var.serveo_subdomain) <= 63
+    condition     = var.serveo_subdomain == "" || (can(regex("^[a-z0-9-]+$", var.serveo_subdomain)) && length(var.serveo_subdomain) <= 63)
     error_message = "Subdomain can contain only lowercase letters, numbers and hyphens, max 63 characters"
   }
+}
+
+variable "tfstate_bucket_region" {
+  description = "Region where the Terraform state S3 bucket is located"
+  type        = string
+  default     = "eu-north-1"
 }

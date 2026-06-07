@@ -1,29 +1,45 @@
 # Minimalny obraz bazowy Alpine Linux
 FROM public.ecr.aws/docker/library/alpine:3.19
 
-# Instalacja tylko SSH klienta na etapie budowania
-# Po tej fazie nie będzie możliwości instalacji dodatkowych pakietów
-RUN apk add --no-cache openssh-client && \
-    apk cache clean
+# Instalacja openssh (klient + serwer) na etapie budowania
+RUN apk add --no-cache openssh-client openssh-server && \
+    rm -rf /var/cache/apk/*
+
+# Przygotowanie katalogów dla sshd
+RUN mkdir -p /etc/ssh /run/sshd /root/.ssh && \
+    chmod 700 /root/.ssh
+
+# Konfiguracja sshd - efemeryczny bastion (bezpieczeństwo = krótki czas życia + losowa subdomena)
+RUN echo "Port 22" > /etc/ssh/sshd_config && \
+    echo "PermitRootLogin yes" >> /etc/ssh/sshd_config && \
+    echo "PubkeyAuthentication yes" >> /etc/ssh/sshd_config && \
+    echo "PasswordAuthentication yes" >> /etc/ssh/sshd_config && \
+    echo "PermitEmptyPasswords yes" >> /etc/ssh/sshd_config && \
+    echo "UsePAM no" >> /etc/ssh/sshd_config && \
+    echo "X11Forwarding no" >> /etc/ssh/sshd_config && \
+    echo "PrintMotd yes" >> /etc/ssh/sshd_config && \
+    echo "AcceptEnv LANG LC_*" >> /etc/ssh/sshd_config && \
+    echo "Subsystem sftp /usr/lib/ssh/sftp-server" >> /etc/ssh/sshd_config && \
+    echo "ClientAliveInterval 60" >> /etc/ssh/sshd_config && \
+    echo "ClientAliveCountMax 3" >> /etc/ssh/sshd_config && \
+    echo "MaxAuthTries 5" >> /etc/ssh/sshd_config && \
+    echo "LoginGraceTime 60" >> /etc/ssh/sshd_config && \
+    echo "MaxSessions 3" >> /etc/ssh/sshd_config
+
+# Ustawienie pustego hasla root (login bez hasla)
+RUN passwd -d root
 
 # Kopiowanie skryptu startowego
 COPY start.sh /usr/local/bin/start.sh
+RUN chmod 755 /usr/local/bin/start.sh
 
-# Nadanie uprawnień wykonywania dla 'nobody' user
-# UID 65534 to standardowy 'nobody' user w Alpine (już istnieje)
-RUN chmod 500 /usr/local/bin/start.sh && \
-    chown nobody:nobody /usr/local/bin/start.sh
-
-# Usunięcie niepotrzebnych plików i katalogów dla minimalizacji ataku powierzchni
-RUN rm -rf /var/cache/apk/* /tmp/* /var/tmp/*
-
-# Przełączenie na użytkownika non-root (nobody - UID 65534)
-USER nobody
+# Usunięcie niepotrzebnych plików dla minimalizacji powierzchni ataku
+RUN rm -rf /tmp/* /var/tmp/*
 
 # Ustawienie katalogu roboczego
-WORKDIR /home/nobody
+WORKDIR /root
 
-# Otwarcie portu 22 (tylko informacyjne, kontener nie nasłuchuje)
+# Port 22 - sshd nasłuchuje (dostępny przez tunel Serveo)
 EXPOSE 22
 
 # Uruchomienie skryptu startowego

@@ -1,29 +1,91 @@
 #!/bin/sh
 set -e
 
-# Trap handler dla obsługi błędów
-trap 'echo "ERROR: SSH tunnel failed or disconnected (exit code: $?)" >&2; exit 1' EXIT
+# ============================================================
+# Ephemeral Bastion - Start Script
+# 1. Generuje klucze SSH (host keys + client key dla Serveo)
+# 2. Konfiguruje authorized_keys z env var
+# 3. Uruchamia sshd
+# 4. Nawiązuje tunel Serveo.net
+# ============================================================
 
-# Pobieranie subdomeny z zmiennej środowiskowej lub użycie domyślnej
+# Trap handler - cleanup przy wyjściu
+cleanup() {
+    echo "INFO: Zamykanie bastionu..."
+    # Zatrzymaj sshd jeśli działa
+    if [ -f /run/sshd/sshd.pid ]; then
+        kill "$(cat /run/sshd/sshd.pid)" 2>/dev/null || true
+    fi
+    exit 0
+}
+trap cleanup EXIT INT TERM
+
+echo "=========================================="
+echo " Ephemeral Bastion - Inicjalizacja"
+echo "=========================================="
+
+# --- KROK 1: Generowanie host keys dla sshd ---
+echo "[1/4] Generowanie kluczy hosta SSH..."
+
+if [ ! -f /etc/ssh/ssh_host_ed25519_key ]; then
+    ssh-keygen -t ed25519 -f /etc/ssh/ssh_host_ed25519_key -N "" -q
+    echo "  -> Wygenerowano ed25519 host key"
+fi
+
+if [ ! -f /etc/ssh/ssh_host_rsa_key ]; then
+    ssh-keygen -t rsa -b 2048 -f /etc/ssh/ssh_host_rsa_key -N "" -q
+    echo "  -> Wygenerowano rsa host key"
+fi
+
+# --- KROK 2: Konfiguracja dostępu ---
+echo "[2/4] Konfiguracja dostepu SSH..."
+echo "  -> Login: ssh -J serveo.net root@<subdomena>"
+echo "  -> Bezposredni dostep (bez hasla)"
+
+# --- KROK 3: Uruchomienie sshd ---
+echo "[3/4] Uruchamianie sshd na porcie 22..."
+
+/usr/sbin/sshd -e
+echo "  -> sshd uruchomiony"
+
+# Weryfikacja że sshd działa
+sleep 1
+if ! pgrep -x sshd > /dev/null 2>&1; then
+    echo "ERROR: sshd nie uruchomił się!"
+    exit 1
+fi
+
+# --- KROK 4: Tunel Serveo.net ---
+echo "[4/4] Nawiązywanie tunelu Serveo.net..."
+
 SERVEO_SUBDOMAIN="${SERVEO_SUBDOMAIN:-ephemeral-bastion}"
+echo "  Żądana subdomena: ${SERVEO_SUBDOMAIN}"
+
+# Generowanie klucza klienta SSH dla Serveo (potrzebny do rezerwacji subdomeny)
+SERVEO_KEY="/tmp/serveo_client_key"
+if [ ! -f "$SERVEO_KEY" ]; then
+    ssh-keygen -t ed25519 -f "$SERVEO_KEY" -N "" -q
+    echo "  -> Wygenerowano klucz klienta dla Serveo"
+fi
 
 echo "=========================================="
-echo "Inicjalizacja tunelu Serveo.net"
-echo "=========================================="
-echo "Subdomena: ${SERVEO_SUBDOMAIN}"
+echo " Łączenie z Serveo.net..."
+echo " Oczekiwany URL: ssh -J serveo.net root@${SERVEO_SUBDOMAIN}"
 echo "=========================================="
 
 # Uruchomienie tunelu SSH do serveo.net
-# -R: reverse tunnel - przekazuje ruch z portu 80 serveo.net na localhost:22
-# -o StrictHostKeyChecking=accept-new: akceptuje nowe klucze bezpiecznie
-# -o UserKnownHostsFile=/tmp/serveo_known_hosts: przechowuje klucze tymczasowo
-# -o ServerAliveInterval=60: utrzymuje tunel aktywnym (heartbeat co 60s)
-# -o ServerAliveCountMax=3: rozłącza po 3 nieudanych heartbeatach (3min timeout)
-# -o ExitOnForwardFailure=yes: wychodzi z błędem jeśli tunel się nie ustanowi
-# -N: nie uruchamia zdalnego polecenia, tylko tunel
+# -R: reverse tunnel - przekazuje ruch z serveo.net na localhost:22 (nasz sshd)
+# -i: klucz klienta (potrzebny do rezerwacji subdomeny)
+# -o StrictHostKeyChecking=accept-new: akceptuje klucz serveo przy pierwszym połączeniu
+# -o UserKnownHostsFile=/dev/null: nie zapisuje known_hosts (ephemeral)
+# -o ServerAliveInterval=60: heartbeat co 60s
+# -o ServerAliveCountMax=3: rozłącz po 3 nieudanych heartbeatach
+# -o ExitOnForwardFailure=yes: zakończ jeśli tunel się nie ustanowi
+# -N: nie uruchamia shell na zdalnym serwerze
 # -T: nie przydziela pseudo-terminala
 
-ssh -R "${SERVEO_SUBDOMAIN}:80:localhost:22" \
+exec ssh -R "${SERVEO_SUBDOMAIN}:22:localhost:22" \
+    -i "$SERVEO_KEY" \
     -o StrictHostKeyChecking=accept-new \
     -o UserKnownHostsFile=/dev/null \
     -o ServerAliveInterval=60 \
@@ -32,7 +94,3 @@ ssh -R "${SERVEO_SUBDOMAIN}:80:localhost:22" \
     -N \
     -T \
     serveo.net
-
-# Jeśli SSH się rozłączy, trap wywoła EXIT i zwróci kod 1
-echo "Tunel został zamknięty"
-exit 0

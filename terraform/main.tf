@@ -11,6 +11,14 @@ data "aws_vpc" "selected" {
   id = var.vpc_id
 }
 
+# Find Internet Gateway attached to VPC (required for outbound connectivity)
+data "aws_internet_gateway" "selected" {
+  filter {
+    name   = "attachment.vpc-id"
+    values = [var.vpc_id]
+  }
+}
+
 # Try to find existing ephemeral-bastion subnet (from previous run)
 data "aws_subnets" "existing_bastion" {
   filter {
@@ -29,8 +37,8 @@ data "aws_subnets" "existing_bastion" {
 
 # Get details of existing bastion subnet if found
 data "aws_subnet" "existing_bastion" {
-  count  = length(data.aws_subnets.existing_bastion.ids) > 0 ? 1 : 0
-  id     = data.aws_subnets.existing_bastion.ids[0]
+  count = length(data.aws_subnets.existing_bastion.ids) > 0 ? 1 : 0
+  id    = data.aws_subnets.existing_bastion.ids[0]
 }
 
 # Get ALL existing subnets in VPC (to detect used CIDRs)
@@ -53,35 +61,28 @@ data "aws_availability_zones" "available" {
 }
 
 # Find first available CIDR block that doesn't conflict
-# Algorithm:
-# 1. VPC CIDR = 10.0.0.0/16
-# 2. Existing subnets occupy specific /24s (e.g., 10.0.1.0/24, 10.0.2.0/24)
-# 3. Generate all possible /24s from VPC (0-255)
-# 4. Filter out ones that conflict with existing
-# 5. Pick the first available one
 locals {
   vpc_cidr       = data.aws_vpc.selected.cidr_block
   existing_cidrs = toset([for subnet in data.aws_subnet.existing : subnet.cidr_block])
-  
+
   # Generate ALL possible /24 CIDRs from this VPC
   all_possible_cidrs = [
     for idx in range(0, 256) :
     cidrsubnet(local.vpc_cidr, 8, idx)
   ]
-  
+
   # Filter to only AVAILABLE CIDRs (not in existing_cidrs)
   available_cidrs = [
     for cidr in local.all_possible_cidrs :
     cidr if !contains(local.existing_cidrs, cidr)
   ]
-  
-  # Use first available, or fallback to first possible (shouldn't happen)
+
+  # Use first available, or fallback to first possible
   new_subnet_cidr = length(local.available_cidrs) > 0 ? local.available_cidrs[0] : local.all_possible_cidrs[0]
 }
 
 # Create temporary subnet for bastion (only if doesn't already exist)
 resource "aws_subnet" "bastion_subnet" {
-  # Skip creation if existing bastion subnet found
   count                   = length(data.aws_subnets.existing_bastion.ids) > 0 ? 0 : 1
   vpc_id                  = var.vpc_id
   cidr_block              = local.new_subnet_cidr
@@ -104,6 +105,30 @@ locals {
   bastion_subnet_id = length(data.aws_subnets.existing_bastion.ids) > 0 ? data.aws_subnets.existing_bastion.ids[0] : aws_subnet.bastion_subnet[0].id
 }
 
+# --- ROUTE TABLE (zapewnia dostep do internetu przez IGW) ---
+
+resource "aws_route_table" "bastion_rt" {
+  vpc_id = var.vpc_id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = data.aws_internet_gateway.selected.id
+  }
+
+  tags = {
+    Name        = "${var.bastion_name}-rt"
+    Environment = "ephemeral"
+    ManagedBy   = "terraform"
+  }
+}
+
+resource "aws_route_table_association" "bastion_rt_assoc" {
+  subnet_id      = local.bastion_subnet_id
+  route_table_id = aws_route_table.bastion_rt.id
+}
+
+# --- SECURITY GROUP ---
+
 # Try to find existing ephemeral-bastion security group (from previous run)
 data "aws_security_groups" "existing_bastion_sg" {
   filter {
@@ -121,9 +146,7 @@ data "aws_security_groups" "existing_bastion_sg" {
 }
 
 # Security Group - inbound blocked, outbound SSH + DNS + HTTPS only
-# Create only if doesn't already exist
 resource "aws_security_group" "bastion_sg" {
-  # Skip creation if existing bastion SG found
   count       = length(data.aws_security_groups.existing_bastion_sg.ids) > 0 ? 0 : 1
   name        = "${var.bastion_name}-sg"
   description = "Security Group for ephemeral bastion - blocked inbound, SSH+DNS+HTTPS outbound"
@@ -137,11 +160,18 @@ resource "aws_security_group" "bastion_sg" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  # Outbound DNS (port 53) for name resolution
+  # Outbound DNS (port 53 TCP+UDP) for name resolution
   egress {
     from_port   = 53
     to_port     = 53
     protocol    = "udp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 53
+    to_port     = 53
+    protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
 
@@ -186,29 +216,20 @@ resource "aws_ecs_cluster" "bastion_cluster" {
   }
 }
 
-# Try to get existing CloudWatch Log Group (if it exists from previous run)
-data "aws_cloudwatch_log_group" "existing" {
-  name = "/ecs/${var.bastion_name}"
-}
-
-# Create log group only if it doesn't already exist
+# CloudWatch Log Group
 resource "aws_cloudwatch_log_group" "bastion_logs" {
-  # Skip creation if log group already exists
-  count             = try(data.aws_cloudwatch_log_group.existing.arn, null) != null ? 0 : 1
   name              = "/ecs/${var.bastion_name}"
   retention_in_days = 1
-  skip_destroy      = true
 
   tags = {
     Environment = "ephemeral"
     ManagedBy   = "terraform"
   }
-}
 
-# Use existing or newly created log group
-locals {
-  log_group_arn  = try(data.aws_cloudwatch_log_group.existing.arn, aws_cloudwatch_log_group.bastion_logs[0].arn)
-  log_group_name = try(data.aws_cloudwatch_log_group.existing.name, aws_cloudwatch_log_group.bastion_logs[0].name)
+  lifecycle {
+    # Ignoruj zmiany retention (może być zmienione ręcznie)
+    ignore_changes = [retention_in_days]
+  }
 }
 
 # IAM Role for ECS Task Execution
@@ -240,12 +261,17 @@ resource "aws_iam_role_policy_attachment" "ecs_task_execution_role_policy" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
-# Random suffix for Serveo subdomain
+# Random suffix for Serveo subdomain (stable across applies)
 resource "random_id" "serveo_suffix" {
   byte_length = 4
 }
 
-# ECS Task Definition (no task execution - workflow will run it on-demand)
+# Computed subdomain
+locals {
+  serveo_subdomain = var.serveo_subdomain != "" ? var.serveo_subdomain : "${var.bastion_name}-${random_id.serveo_suffix.hex}"
+}
+
+# ECS Task Definition
 resource "aws_ecs_task_definition" "bastion_task" {
   family                   = "${var.bastion_name}-task"
   network_mode             = "awsvpc"
@@ -261,23 +287,24 @@ resource "aws_ecs_task_definition" "bastion_task" {
       image     = var.container_image
       essential = true
 
-      # Security hardening
-      readonlyRootFilesystem = true
+      # Filesystem musi byc writable dla generowania kluczy SSH
+      readonlyRootFilesystem = false
       disableNetworking      = false
 
-      # Run as non-root user (nobody - UID 65534)
-      user = "65534:65534"
+      # Run as root (wymagane dla sshd)
+      user = "0:0"
 
-      # No privilege escalation
+      # No extra privilege escalation
       privileged = false
 
-      # Drop all capabilities
+      # Minimalne capabilities - NET_BIND_SERVICE dla portu 22, SYS_CHROOT i SETUID/SETGID dla sshd
       linuxParameters = {
         capabilities = {
           drop = ["ALL"]
-          add  = []
+          add  = ["NET_BIND_SERVICE", "SYS_CHROOT", "SETUID", "SETGID", "CHOWN", "DAC_OVERRIDE"]
         }
-        devices = []
+        devices            = []
+        initProcessEnabled = true
       }
 
       # No mount points
@@ -287,7 +314,7 @@ resource "aws_ecs_task_definition" "bastion_task" {
       logConfiguration = {
         logDriver = "awslogs"
         options = {
-          "awslogs-group"         = local.log_group_name
+          "awslogs-group"         = aws_cloudwatch_log_group.bastion_logs.name
           "awslogs-region"        = var.region
           "awslogs-stream-prefix" = "bastion"
         }
@@ -297,7 +324,7 @@ resource "aws_ecs_task_definition" "bastion_task" {
       environment = [
         {
           name  = "SERVEO_SUBDOMAIN"
-          value = var.serveo_subdomain != "" ? var.serveo_subdomain : "${var.bastion_name}-${random_id.serveo_suffix.hex}"
+          value = local.serveo_subdomain
         }
       ]
 
@@ -312,7 +339,7 @@ resource "aws_ecs_task_definition" "bastion_task" {
   }
 }
 
-# --- ECS SERVICE (pilnuje aby zawsze był 1 task uruchomiony) ---
+# --- ECS SERVICE (pilnuje aby zawsze byl DOKLADNIE 1 task uruchomiony) ---
 
 resource "aws_ecs_service" "bastion_service" {
   name            = "${var.bastion_name}-service"
@@ -321,15 +348,22 @@ resource "aws_ecs_service" "bastion_service" {
   desired_count   = 1
   launch_type     = "FARGATE"
 
+  # KLUCZOWE: deployment config zapewnia ze NIGDY nie ma wiecej niz 1 task
+  # minimum_healthy_percent=0 -> ECS najpierw ZATRZYMA stary task
+  # maximum_percent=100 -> ECS NIGDY nie uruchomi wiecej niz 1 task
+  deployment_minimum_healthy_percent = 0
+  deployment_maximum_percent         = 100
+
   network_configuration {
     subnets          = [local.bastion_subnet_id]
     security_groups  = [local.bastion_sg_id]
     assign_public_ip = true
   }
 
-  lifecycle {
-    ignore_changes = [task_definition]
-  }
+  # NIE ignorujemy task_definition - chcemy aby service zawsze uzywal najnowszej
+  # lifecycle {
+  #   ignore_changes = [task_definition]
+  # }
 
   tags = {
     Environment = "ephemeral"
@@ -338,6 +372,7 @@ resource "aws_ecs_service" "bastion_service" {
 
   depends_on = [
     aws_ecs_task_definition.bastion_task,
-    aws_cloudwatch_log_group.bastion_logs
+    aws_cloudwatch_log_group.bastion_logs,
+    aws_route_table_association.bastion_rt_assoc
   ]
 }

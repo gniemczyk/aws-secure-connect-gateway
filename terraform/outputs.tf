@@ -1,15 +1,5 @@
 # Outputs from Terraform configuration
 
-output "debug_existing_subnets" {
-  description = "DEBUG: All existing subnets in VPC"
-  value       = [for subnet in data.aws_subnet.existing : "${subnet.id}: ${subnet.cidr_block}"]
-}
-
-output "debug_available_cidrs" {
-  description = "DEBUG: First 10 available CIDR blocks"
-  value       = slice(local.available_cidrs, 0, min(10, length(local.available_cidrs)))
-}
-
 output "cluster_name" {
   description = "ECS Cluster name"
   value       = aws_ecs_cluster.bastion_cluster.name
@@ -21,18 +11,13 @@ output "cluster_arn" {
 }
 
 output "task_definition_arn" {
-  description = "ECS Task Definition ARN"
+  description = "ECS Task Definition ARN (latest revision)"
   value       = aws_ecs_task_definition.bastion_task.arn
 }
 
 output "subnet_id" {
   description = "Subnet ID (reused if exists, or newly created)"
   value       = local.bastion_subnet_id
-}
-
-output "subnet_cidr" {
-  description = "Subnet CIDR block (reused if exists, or auto-allocated)"
-  value       = length(data.aws_subnets.existing_bastion.ids) > 0 ? data.aws_subnet.existing_bastion[0].cidr_block : aws_subnet.bastion_subnet[0].cidr_block
 }
 
 output "security_group_id" {
@@ -42,16 +27,20 @@ output "security_group_id" {
 
 output "log_group_name" {
   description = "CloudWatch Log Group name"
-  value       = local.log_group_name
+  value       = aws_cloudwatch_log_group.bastion_logs.name
 }
 
 output "serveo_subdomain" {
   description = "Serveo.net subdomain for tunnel"
-  value       = var.serveo_subdomain != "" ? var.serveo_subdomain : "${var.bastion_name}-${random_id.serveo_suffix.hex}"
+  value       = local.serveo_subdomain
 }
 
 output "service_name" {
-  description = "ECS Service name (pilnuje aby zawsze był 1 task)"
+  description = "ECS Service name (pilnuje aby zawsze byl 1 task)"
   value       = aws_ecs_service.bastion_service.name
 }
 
+output "connection_command" {
+  description = "SSH command to connect to bastion"
+  value       = "ssh -J serveo.net root@${local.serveo_subdomain}"
+}
