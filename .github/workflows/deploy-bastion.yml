@@ -125,16 +125,6 @@ jobs:
 
       - name: Wait for task
         if: github.event.inputs.action == 'START'
-        run: |
-          aws ecs update-service \
-            --cluster "${{ steps.tf.outputs.cluster }}" \
-            --service "${{ steps.tf.outputs.service }}" \
-            --task-definition "${{ steps.tf.outputs.task_def }}" \
-            --force-new-deployment \
-            --region ${{ env.AWS_REGION }} > /dev/null
-
-      - name: Wait for task
-        if: github.event.inputs.action == 'START'
         id: task
         run: |
           CLUSTER="${{ steps.tf.outputs.cluster }}"
@@ -212,23 +202,46 @@ jobs:
       - name: Stop service
         if: github.event.inputs.action == 'STOP'
         run: |
+          echo "Zatrzymywanie bastionu..."
           aws ecs update-service \
             --cluster "${{ env.BASTION_NAME }}-cluster" \
             --service "${{ env.BASTION_NAME }}-service" \
             --desired-count 0 \
             --region ${{ env.AWS_REGION }} > /dev/null 2>&1 || true
-          sleep 15
+
+          echo "Czekanie na zatrzymanie tasku..."
+          for i in $(seq 1 12); do
+            COUNT=$(aws ecs list-tasks --cluster "${{ env.BASTION_NAME }}-cluster" \
+              --service-name "${{ env.BASTION_NAME }}-service" \
+              --desired-status RUNNING --region ${{ env.AWS_REGION }} \
+              --query 'length(taskArns)' --output text 2>/dev/null || echo "0")
+            if [ "$COUNT" = "0" ]; then
+              echo "Task zatrzymany."
+              break
+            fi
+            echo "[$i/12] Jeszcze dziala ($COUNT tasks)..."
+            sleep 5
+          done
 
       - name: Terraform Destroy
         if: github.event.inputs.action == 'STOP'
         working-directory: ./terraform
         run: |
-          terraform import \
-            -var="vpc_id=${{ vars.VPC_ID }}" \
-            -var="region=${{ env.AWS_REGION }}" \
-            -var="container_image=000000000000.dkr.ecr.eu-central-1.amazonaws.com/x:latest" \
-            aws_ecs_service.bastion_service \
-            "${{ env.BASTION_NAME }}-cluster/${{ env.BASTION_NAME }}-service" 2>/dev/null || true
+          # Import zasobow do state (potrzebne jesli state jest pusty)
+          TF_VARS="-var=vpc_id=${{ vars.VPC_ID }} -var=region=${{ env.AWS_REGION }} -var=container_image=000000000000.dkr.ecr.eu-central-1.amazonaws.com/x:latest"
+
+          terraform import $TF_VARS \
+            aws_iam_role.ecs_task_execution_role "${{ env.BASTION_NAME }}-exec-role" 2>/dev/null || true
+          terraform import $TF_VARS \
+            aws_iam_role_policy_attachment.ecs_exec_policy "${{ env.BASTION_NAME }}-exec-role/arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy" 2>/dev/null || true
+          terraform import $TF_VARS \
+            aws_iam_role.ecs_task_role "${{ env.BASTION_NAME }}-task-role" 2>/dev/null || true
+          terraform import $TF_VARS \
+            aws_ecs_cluster.bastion_cluster "${{ env.BASTION_NAME }}-cluster" 2>/dev/null || true
+          terraform import $TF_VARS \
+            aws_ecs_service.bastion_service "${{ env.BASTION_NAME }}-cluster/${{ env.BASTION_NAME }}-service" 2>/dev/null || true
+          terraform import $TF_VARS \
+            aws_cloudwatch_log_group.bastion_logs "/ecs/${{ env.BASTION_NAME }}" 2>/dev/null || true
 
           terraform destroy -auto-approve \
             -var="vpc_id=${{ vars.VPC_ID }}" \
@@ -237,4 +250,11 @@ jobs:
 
       - name: Potwierdzenie (STOP)
         if: github.event.inputs.action == 'STOP'
-        run: echo "## Bastion usuniety" >> $GITHUB_STEP_SUMMARY
+        run: |
+          echo ""
+          echo "============================================"
+          echo " BASTION ZATRZYMANY"
+          echo "============================================"
+          echo ""
+          echo "## Bastion zatrzymany" >> $GITHUB_STEP_SUMMARY
+          echo "Wszystkie zasoby usuniete. Brak kosztow." >> $GITHUB_STEP_SUMMARY
