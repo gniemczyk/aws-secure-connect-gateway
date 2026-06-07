@@ -179,19 +179,23 @@ jobs:
           CLUSTER="${{ steps.tf.outputs.cluster }}"
           TASK_ID="${{ steps.task.outputs.task_id }}"
           REGION="${{ env.AWS_REGION }}"
+          CMD="aws ecs execute-command --cluster ${CLUSTER} --task ${TASK_ID} --interactive --command \"/bin/sh\" --region ${REGION}"
+
+          echo ""
+          echo "============================================"
+          echo " BASTION GOTOWY - POLACZ SIE KOMENDA:"
+          echo "============================================"
+          echo ""
+          echo "$CMD"
+          echo ""
+          echo "============================================"
+          echo ""
 
           echo "## BASTION GOTOWY" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Polacz sie komenda:" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
-          echo "aws ecs execute-command --cluster ${CLUSTER} --task ${TASK_ID} --interactive --command \"/bin/sh\" --region ${REGION}" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Task ID: \`${TASK_ID}\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "---" >> $GITHUB_STEP_SUMMARY
-          echo "Aby zatrzymac: uruchom workflow z akcja **STOP**" >> $GITHUB_STEP_SUMMARY
+          echo "$CMD" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
 
       # ===== STOP =====
       - name: Stop service
