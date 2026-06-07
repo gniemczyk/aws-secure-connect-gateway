@@ -1,4 +1,4 @@
-# Secure Connect Gateway
+# AWS Secure Connect Gateway
 
 Efemeryczny bastion oparty na AWS ECS Fargate z dostępem przez ECS Exec (AWS Systems Manager).
 
