@@ -1,325 +1,190 @@
 # Secure Connect Gateway
 
-Bezpieczny, efemeryczny bastion SSH oparty na AWS ECS Fargate z autoryzacją GitHub OIDC i tunelowaniem przez Serveo.net.
+Efemeryczny bastion oparty na AWS ECS Fargate z dostępem przez ECS Exec (AWS Systems Manager).
 
-## Architektura
+## Jak działa
 
-- **ECS Fargate Task**: Kontener uruchamiany w AWS ECS Fargate
-- **Serveo.net**: Przezroczysty tunel SSH bez generowania kluczy
-- **GitHub OIDC**: Autoryzacja do AWS bez stałych credentials
-- **Terraform**: Zarządzanie infrastrukturą jako kod
-- **Efemeryczność**: Pełne czyszczenie zasobów po zakończeniu
+1. GitHub Workflow uruchamia kontener w ECS Fargate (wewnątrz Twojego VPC)
+2. Łączysz się przez `aws ecs execute-command` (SSM Session Manager)
+3. Masz shell wewnątrz VPC - możesz łączyć się do baz danych, serwisów itp.
+4. Workflow STOP usuwa wszystkie zasoby
 
-## Bezpieczeństwo
+```
+Twój komputer
+     ↓  aws ecs execute-command (SSM, szyfrowane)
+AWS ECS Fargate Task (wewnątrz VPC)
+     ↓  bezpośredni dostęp sieciowy
+Zasoby VPC (RDS, ElastiCache, EC2, itp.)
+```
 
-### Hardening Kontenera
-- **Minimalny obraz**: Alpine Linux 3.19 z tylko SSH klientem
-- **Non-root user**: Kontener uruchamiany jako użytkownik nobody (UID 65534)
-- **Readonly filesystem**: System plików całkowicie zablokowany do zapisu
-- **Brak pakietów**: Niemożliwa instalacja pakietów w locie
-- **Zablokowany inbound**: Security Group blokuje cały ruch przychodzący
-- **Brak capabilities**: Wszystkie Linux capabilities usunięte
-- **Brak execute command**: Wyłączona możliwość ECS execute command
+## Quick Start
 
-### Bezpieczeństwo Sieciowe
-- **Tymczasowa podsieć**: Tworzona na czas życia bastionu
-- **Security Group**: Zablokowany inbound, outbound tylko na SSH (port 22) i DNS (port 53)
-- **Public IP**: Tylko dla połączenia z Serveo.net
-- **Ograniczony ruch**: Brak możliwości danych exfiltration
+### 1. Wymagania na Twoim komputerze
 
-## Wymagania Wstępne - QUICK START
+```bash
+# AWS CLI
+brew install awscli
 
-### 1. GitHub Secrets
-Ustaw w repozytorium GitHub (Settings → Secrets and variables → Actions → Secrets):
-- `AWS_ROLE_ARN`: Twoja rola IAM ARN (np. `arn:aws:iam::837175765719:role/github-actions-role`)
-- `AWS_ACCOUNT_ID`: Twój AWS Account ID (np. `837175765719`)
+# Session Manager Plugin (wymagany dla ECS Exec)
+brew install --cask session-manager-plugin
+```
 
-### 2. GitHub Variables  
-Ustaw w repozytorium GitHub (Settings → Secrets and variables → Actions → Variables):
-- `VPC_ID`: Twój VPC ID (np. `vpc-12345678`)
-- `AWS_REGION`: Region AWS gdzie masz VPC (np. `eu-north-1`, `eu-central-1`, `us-east-1`)
+### 2. GitHub Secrets
 
-### 3. AWS Configuration
+Settings → Secrets and variables → Actions → Secrets:
 
-Skonfiguruj OIDC w AWS (one-time setup):
+| Secret | Wartość |
+|--------|---------|
+| `AWS_ROLE_ARN` | `arn:aws:iam::ACCOUNT_ID:role/github-actions-role` |
+| `AWS_ACCOUNT_ID` | `123456789012` |
 
-1. **Utwórz Identity Provider w AWS IAM Console**:
-   ```
-   Provider type: OpenID Connect
-   Provider URL: https://token.actions.githubusercontent.com
-   Audience: sts.amazonaws.com
-   ```
+### 3. GitHub Variables
 
-2. **Utwórz Rolę IAM z trust policy** (dostosuj do swoich gałęzi):
-   ```json
-   {
-     "Version": "2012-10-17",
-     "Statement": [{
-       "Effect": "Allow",
-       "Principal": {
-         "Federated": "arn:aws:iam::837175765719:oidc-provider/token.actions.githubusercontent.com"
-       },
-       "Action": "sts:AssumeRoleWithWebIdentity",
-       "Condition": {
-         "StringLike": {
-           "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
-           "token.actions.githubusercontent.com:sub": [
-             "repo:gniemczyk/*:ref:refs/heads/main",
-             "repo:gniemczyk/*:ref:refs/heads/develop"
-           ]
-         }
-       }
-     }]
-   }
-   ```
+Settings → Secrets and variables → Actions → Variables:
 
-3. **Przypisz uprawnienia do roli**:
+| Variable | Wartość |
+|----------|---------|
+| `VPC_ID` | `vpc-xxxxxxxx` |
+| `AWS_REGION` | `eu-north-1` |
+| `TFSTATE_REGION` | `eu-north-1` |
+
+### 4. AWS - jednorazowa konfiguracja OIDC
+
+1. IAM → Identity Providers → Add provider:
+   - Type: OpenID Connect
+   - URL: `https://token.actions.githubusercontent.com`
+   - Audience: `sts.amazonaws.com`
+
+2. Utwórz rolę IAM z trust policy:
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Principal": {
+      "Federated": "arn:aws:iam::ACCOUNT_ID:oidc-provider/token.actions.githubusercontent.com"
+    },
+    "Action": "sts:AssumeRoleWithWebIdentity",
+    "Condition": {
+      "StringLike": {
+        "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+        "token.actions.githubusercontent.com:sub": "repo:TWOJ_USER/secure-connect-gateway:*"
+      }
+    }
+  }]
+}
+```
+
+3. Przypisz uprawnienia do roli:
    - `AmazonECS_FullAccess`
    - `AmazonVPCFullAccess`
    - `CloudWatchLogsFullAccess`
-   
-   Lub dla maksymalnej elastyczności: `AdministratorAccess`
-
-4. **Skopiuj ARN roli** i ustaw jako `AWS_ROLE_ARN` w GitHub Secrets
-
-### Docker Image - Automatycznie tworzone w AWS ECR
-
-✅ **Automatyka:** Workflow automatycznie:
-- Tworzy ECR repository jeśli nie istnieje
-- Builduje nowy image za każdym **START**
-- Pushuje do AWS ECR w Twoim regionie
-- Skanuje image na podatności (Trivy)
-- Usuwa stary image (jeśli istnieje)
-
-**Gdzie jest obraz:**
-```
-AWS ECR → Region: vars.AWS_REGION → Repository: secure-connect-gateway
-Full URI: ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/secure-connect-gateway:COMMIT_SHA
-```
-
-**Plik tworzy się za każdym START - brak ręcznego setup'u potrzebny!**
+   - `IAMFullAccess` (dla tworzenia task roles)
+   - `AmazonSSMFullAccess` (dla ECS Exec)
 
 ## Użycie
 
-### Uruchomienie Bastionu (START)
+### START - uruchomienie bastionu
 
-1. Przejdź do GitHub Actions
-2. Uruchom workflow "Efemeryczny Bastion ECS Fargate"
-3. Wybierz akcję: **START**
-4. Opcjonalnie podaj subdomenę Serveo.net (pozostaw puste dla losowej)
-5. Poczekaj na zakończenie workflow
-6. URL bastionu pojawi się w GitHub Summary
-
-### Połączenie z Bastionem
-
-#### 1. Podstawowe SSH dostęp
-
-Po uruchomieniu workflow **START**, otrzymasz URL w GitHub Summary:
+1. GitHub → Actions → "Efemeryczny Bastion ECS Fargate" → Run workflow
+2. Akcja: **START**
+3. Po zakończeniu w logach kroku "Podsumowanie" zobaczysz komendę:
 
 ```bash
-# Bezpośrednie SSH do bastionu
-ssh -p 80 ephemeral-bastion-abc123.serveo.net
-
-# Jeśli port 80 jest zablokowany:
-ssh -o ProxyCommand="curl -H @- http://ephemeral-bastion-abc123.serveo.net" %h
+aws ecs execute-command --cluster ephemeral-bastion-cluster --task TASK_ID --interactive --command "/bin/sh" --region eu-north-1
 ```
 
-⚠️ **Ważne:** Bastion sam z siebie **nie da ci dostępu do żadnego serwera**. To jest tunel SSH - musisz mieć dostęp do wewnętrznych zasobów z innego miejsca (np. VPN, internal network, lub inny bastion).
+4. Skopiuj i wklej na swoim terminalu - masz shell wewnątrz VPC.
 
-#### 2. Port Forwarding - Dostęp do MySQL/PostgreSQL/itp.
+### STOP - zatrzymanie bastionu
 
-Jeśli masz dostęp do bazy danych wewnątrz VPC (np. MySQL na `10.0.1.50:3306`):
+1. GitHub → Actions → Run workflow
+2. Akcja: **STOP**
+3. Wszystkie zasoby zostaną usunięte
 
-**Wariant A - Forward lokalnie na port 3306:**
-```bash
-ssh -p 80 -L 3306:10.0.1.50:3306 ephemeral-bastion-abc123.serveo.net
-```
+### Przykłady użycia wewnątrz bastionu
 
-Teraz połącz się lokalnie:
-```bash
-mysql -h localhost -u admin -p
-# lub
-psql -h localhost -U admin -d mydb
-```
-
-**Wariant B - Forward na inny port (np. 8306 - aby nie kolidować):**
-```bash
-ssh -p 80 -L 8306:10.0.1.50:3306 ephemeral-bastion-abc123.serveo.net
-```
-
-Teraz połącz się na innym porcie:
-```bash
-mysql -h localhost -P 8306 -u admin -p
-```
-
-**Wariant C - Forward z IP wewnętrznym (dostęp z innych komputerów w sieci):**
-```bash
-ssh -p 80 -L 0.0.0.0:3306:10.0.1.50:3306 ephemeral-bastion-abc123.serveo.net
-```
-
-Inne komputery w Twojej sieci mogą teraz łączyć się:
-```bash
-mysql -h 192.168.1.100 -u admin -p  # Twój IP w sieci
-```
-
-#### 3. Praktyczne przykłady
-
-**Dostęp do Redis wewnątrz VPC:**
-```bash
-ssh -p 80 -L 6379:internal-redis.ec2.internal:6379 ephemeral-bastion-abc123.serveo.net
-# Używaj: redis-cli -h localhost -p 6379
-```
-
-**Dostęp do RDS bazy danych:**
-```bash
-ssh -p 80 -L 5432:mydb.abcdefg.eu-central-1.rds.amazonaws.com:5432 ephemeral-bastion-abc123.serveo.net
-# Używaj: psql -h localhost -U postgres -d mydb
-```
-
-**Dostęp do innego serwera SSH wewnątrz VPC:**
-```bash
-ssh -p 80 -L 2222:10.0.2.100:22 ephemeral-bastion-abc123.serveo.net
-# Pierwsze SSH połączenie: wewnętrzny serwer
-ssh -p 2222 localhost
-```
-
-#### 4. Jak to działa - przepływ dostępu
-
-```
-Twój komputer (localhost:3306)
-           ↓ SSH-P 80
-    Serveo.net tunel (publiczny)
-           ↓
-  ECS Fargate Task (private)
-           ↓ SSH client w kontenerze
-  Zasoby wewnątrz VPC (10.0.x.x)
-```
-
-Kroki:
-1. Workflow **START** uruchamia task w Fargate
-2. Task uruchamia SSH klienta, który łączy się z Serveo.net
-3. Ty łączysz się do localhost:3306 (lub innego portu)
-4. SSH tunel forwarduje ruch do IP/portu wewnątrz VPC
-5. Task przesyła odpowiedź z powrotem przez Serveo.net do Ciebie
-
-#### 5. Troubleshooting forwardowania
-
-**Błąd: "Connection refused"**
-```bash
-# Sprawdź czy zarejestrowany IP:port istnieje wewnątrz VPC
-ping 10.0.1.50
-telnet 10.0.1.50 3306
-```
-
-**Błąd: "Address already in use" (port 3306 zajęty)**
-```bash
-# Użyj innego portu:
-ssh -p 80 -L 8306:10.0.1.50:3306 ephemeral-bastion-abc123.serveo.net
-```
-
-**Port 80 zablokowany - użyj tunelu przez HTTP:**
-```bash
-ssh -p 80 -o ProxyCommand="curl -H @- http://ephemeral-bastion-abc123.serveo.net" \
-    -L 3306:10.0.1.50:3306 %h
-```
-
-#### 6. Keep tunnel alive
-
-SSH może się rozłączyć po nieaktywności. Aby utrzymać tunel:
+Po połączeniu masz shell Alpine Linux z narzędziami:
 
 ```bash
-ssh -p 80 \
-    -L 3306:10.0.1.50:3306 \
-    -o ServerAliveInterval=60 \
-    -o ServerAliveCountMax=3 \
-    -N \
-    ephemeral-bastion-abc123.serveo.net
+# Sprawdzenie połączenia do RDS
+ncat -zv mydb.abc123.eu-north-1.rds.amazonaws.com 5432
+
+# Zapytanie do API wewnętrznego
+curl http://internal-service.local:8080/health
+
+# DNS lookup
+dig internal-service.local
+
+# Sprawdzenie dostępności hosta
+ncat -zv 10.0.1.50 3306
 ```
 
-Opcje:
-- `-N`: Nie wykonuj żadnego polecenia, tylko tunel
-- `-o ServerAliveInterval=60`: Ping co 60 sekund
-- `-o ServerAliveCountMax=3`: Rozłącz po 3 nieudanych ping'ach (3 minuty timeout)
-
-### Zatrzymanie Bastionu (STOP)
-
-1. Przejdź do GitHub Actions
-2. Uruchom workflow "Efemeryczny Bastion ECS Fargate"
-3. Wybierz akcję: **STOP**
-4. Wszystkie zasoby zostaną usunięte
-
-## Struktura Projektu
+## Struktura projektu
 
 ```
 .
-├── .github/
-│   └── workflows/
-│       └── deploy-bastion.yml    # GitHub Actions workflow
+├── .github/workflows/
+│   └── deploy-bastion.yml    # GitHub Actions workflow
 ├── terraform/
-│   ├── backend.tf                # Konfiguracja backendu
-│   ├── main.tf                   # Główna konfiguracja zasobów
-│   ├── variables.tf              # Zmienne wejściowe
-│   └── outputs.tf                # Wyjścia Terraform
-├── Dockerfile                    # Definicja kontenera z hardeningiem
-├── start.sh                      # Skrypt startowy tunelu Serveo.net
-└── README.md                     # Ten plik
+│   ├── backend.tf            # S3 backend
+│   ├── main.tf               # ECS, IAM, networking
+│   ├── variables.tf          # Zmienne
+│   └── outputs.tf            # Outputy
+├── Dockerfile                # Alpine + narzędzia sieciowe
+├── start.sh                  # Keepalive script
+└── README.md
 ```
 
-### Zasoby Tworzone przez Terraform
+## Zasoby tworzone przez Terraform
 
-Gdy uruchomisz workflow **START**:
-- Tymczasowa podsieć w VPC
-- Security Group (zablokowany inbound, SSH + DNS outbound)
-- ECS Cluster
-- ECS Task Definition
-- ECS Fargate Task (z Twoim image'em)
-- CloudWatch Log Group (1-dniowa retencja)
-- IAM Role dla execution task
-
-Gdy uruchomisz workflow **STOP**:
-- Wszystkie powyższe zasoby są usuwane
-- VPC pozostaje nienaruszone (będzie można go ponownie użyć)
+| Zasób | Cel |
+|-------|-----|
+| ECS Cluster | Hosting kontenerów |
+| ECS Service (desired=1) | Utrzymuje dokładnie 1 task |
+| ECS Task Definition | Definicja kontenera |
+| IAM Execution Role | Pulling images, logi |
+| IAM Task Role + SSM Policy | ECS Exec (session manager) |
+| Subnet | Tymczasowa podsieć w VPC |
+| Route Table + IGW route | Dostęp do internetu (ECR pull) |
+| Security Group | Outbound only (brak inbound) |
+| CloudWatch Log Group | Logi kontenera (1 dzień retencji) |
 
 ## Troubleshooting
 
-### Ogólne informacje
+### "TargetNotConnectedException" przy execute-command
 
-**Co robić jeśli task się uruchamia, ale nie mogę się połączyć?**
+SSM agent potrzebuje 30-60 sekund po starcie taska. Poczekaj i spróbuj ponownie.
 
-Typowy flow:
-1. Task startuje w prywatnej sieci AWS (VPC)
-2. Task uruchamia SSH klient, który tworzy tunel do Serveo.net
-3. Ty łączysz się z Serveo.net (publiczny)
-4. Ruch jest forwardowany przez tunel do zasobów w Twojej VPC
+```bash
+# Sprawdź czy ECS Exec jest włączony na tasku:
+aws ecs describe-tasks --cluster ephemeral-bastion-cluster --tasks TASK_ID \
+  --region eu-north-1 --query 'tasks[0].enableExecuteCommand'
+```
 
-Jeśli coś nie działa, sprawdź każdy krok.
+Jeśli zwraca `false` - uruchom workflow ponownie (START).
+
+### "Session Manager Plugin not found"
+
+```bash
+brew install --cask session-manager-plugin
+```
 
 ### Task nie uruchamia się
-- Sprawdź czy VPC_ID jest poprawne
-- Sprawdź czy rola IAM ma odpowiednie uprawnienia
-- Sprawdź czy container_image URI jest prawidłowy (ECR lub public)
-- Sprawdź CloudWatch Logs pod kątem błędów
 
-### Błąd: "Unable to pull image"
-- Sprawdź czy image jest dostępny w GitHub Container Registry
-- Workflow automatycznie pushuje image - sprawdź GitHub Actions logs
-- Jeśli używasz prywatnego ECR: sprawdź IAM permissions dla ECS Task Role
+- Sprawdź CloudWatch Logs: `/ecs/ephemeral-bastion`
+- Sprawdź czy VPC ma Internet Gateway
+- Sprawdź czy rola IAM ma uprawnienia ECS + ECR
 
-### Serveo.net nie działa
-- Sprawdź czy podsieć ma public IP
-- Sprawdź czy Security Group pozwala na outbound SSH (port 22)
-- Sprawdź czy kontener ma dostęp do internetu (DNS resolution)
-- Sprawdź CloudWatch logs: "Inicjalizacja tunelu Serveo.net"
+### Terraform błędy przy powtórnym START
 
-### Terraform apply kończy się błędem
-- Sprawdź czy podsieć CIDR nie koliduje z istniejącymi
-- Uruchom STOP przed ponownym START
-- Sprawdź czy zmienne Terraform przeszły walidację
+Workflow automatycznie importuje istniejące zasoby. Jeśli nadal są błędy - uruchom STOP, potem START.
 
-### Koszty ECR są za wysokie
-- Workflow używa GitHub Container Registry (GHCR) - bezpłatny!
-- Jeśli chcesz zmienić na AWS ECR: zmień workflow i ustaw lifecycle policy do auto-cleanup
+## Bezpieczeństwo
 
-## Licencja
-
-LICENSE
+- **Brak inbound**: Security Group blokuje cały ruch przychodzący
+- **IAM auth**: Dostęp tylko przez uwierzytelnione AWS credentials
+- **Efemeryczność**: Zasoby usuwane po STOP
+- **Szyfrowanie**: SSM Session Manager szyfruje ruch end-to-end
+- **Audyt**: CloudTrail loguje kto i kiedy łączył się przez ECS Exec
+- **Brak SSH/portów/tuneli**: Żadne porty nie są wystawione publicznie
