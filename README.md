@@ -188,3 +188,7 @@ Workflow automatycznie importuje istniejące zasoby. Jeśli nadal są błędy - 
 - **Szyfrowanie**: SSM Session Manager szyfruje ruch end-to-end
 - **Audyt**: CloudTrail loguje kto i kiedy łączył się przez ECS Exec
 - **Brak SSH/portów/tuneli**: Żadne porty nie są wystawione publicznie
+
+---
+**Autor:** Grzegorz N  
+**Data:** Czerwiec 2026
