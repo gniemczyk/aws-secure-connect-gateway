@@ -122,7 +122,12 @@ jobs:
             RANDOM_SUF=$(openssl rand -hex 6)
             echo "subdomain=bastion-${RANDOM_SUF}" >> $GITHUB_OUTPUT
           fi
-          echo "Subdomena: $(cat $GITHUB_OUTPUT | grep subdomain | cut -d= -f2)"
+
+          # Losowy port TCP dla tunelu Serveo (10000-60000)
+          RANDOM_PORT=$(shuf -i 10000-60000 -n 1)
+          echo "port=$RANDOM_PORT" >> $GITHUB_OUTPUT
+          echo "Subdomena: $(grep subdomain $GITHUB_OUTPUT | cut -d= -f2)"
+          echo "Port TCP: $RANDOM_PORT"
 
       - name: Skanowanie obrazu na podatnosci (Trivy)
         if: github.event.inputs.action == 'START'
@@ -206,6 +211,7 @@ jobs:
             -var="region=${{ env.AWS_REGION }}" \
             -var="container_image=${{ env.IMAGE_URI }}" \
             -var="serveo_subdomain=${{ steps.subdomain.outputs.subdomain }}" \
+            -var="serveo_port=${{ steps.subdomain.outputs.port }}" \
             aws_iam_role.ecs_task_execution_role \
             "$ROLE_NAME" 2>/dev/null || true
 
@@ -215,6 +221,7 @@ jobs:
             -var="region=${{ env.AWS_REGION }}" \
             -var="container_image=${{ env.IMAGE_URI }}" \
             -var="serveo_subdomain=${{ steps.subdomain.outputs.subdomain }}" \
+            -var="serveo_port=${{ steps.subdomain.outputs.port }}" \
             aws_ecs_cluster.bastion_cluster \
             "$CLUSTER_NAME" 2>/dev/null || true
 
@@ -224,6 +231,7 @@ jobs:
             -var="region=${{ env.AWS_REGION }}" \
             -var="container_image=${{ env.IMAGE_URI }}" \
             -var="serveo_subdomain=${{ steps.subdomain.outputs.subdomain }}" \
+            -var="serveo_port=${{ steps.subdomain.outputs.port }}" \
             aws_ecs_service.bastion_service \
             "${CLUSTER_NAME}/${SERVICE_NAME}" 2>/dev/null || true
 
@@ -233,6 +241,7 @@ jobs:
             -var="region=${{ env.AWS_REGION }}" \
             -var="container_image=${{ env.IMAGE_URI }}" \
             -var="serveo_subdomain=${{ steps.subdomain.outputs.subdomain }}" \
+            -var="serveo_port=${{ steps.subdomain.outputs.port }}" \
             aws_cloudwatch_log_group.bastion_logs \
             "/ecs/${{ env.BASTION_NAME }}" 2>/dev/null || true
 
@@ -247,7 +256,8 @@ jobs:
             -var="vpc_id=${{ vars.VPC_ID }}" \
             -var="region=${{ env.AWS_REGION }}" \
             -var="container_image=${{ env.IMAGE_URI }}" \
-            -var="serveo_subdomain=${{ steps.subdomain.outputs.subdomain }}"
+            -var="serveo_subdomain=${{ steps.subdomain.outputs.subdomain }}" \
+            -var="serveo_port=${{ steps.subdomain.outputs.port }}"
           terraform apply tfplan
 
       - name: Pobranie outputow Terraform
@@ -261,6 +271,7 @@ jobs:
           SG_ID=$(terraform output -raw security_group_id)
           LOG_GROUP=$(terraform output -raw log_group_name)
           SERVEO_SUBDOMAIN=$(terraform output -raw serveo_subdomain)
+          SERVEO_PORT=$(terraform output -raw serveo_port)
           SERVICE_NAME=$(terraform output -raw service_name)
           CONNECTION_CMD=$(terraform output -raw connection_command)
 
@@ -270,6 +281,7 @@ jobs:
           echo "sg_id=$SG_ID" >> $GITHUB_OUTPUT
           echo "log_group=$LOG_GROUP" >> $GITHUB_OUTPUT
           echo "serveo_subdomain=$SERVEO_SUBDOMAIN" >> $GITHUB_OUTPUT
+          echo "serveo_port=$SERVEO_PORT" >> $GITHUB_OUTPUT
           echo "service_name=$SERVICE_NAME" >> $GITHUB_OUTPUT
           echo "connection_cmd=$CONNECTION_CMD" >> $GITHUB_OUTPUT
 
@@ -419,37 +431,37 @@ jobs:
         if: github.event.inputs.action == 'START' && success()
         env:
           SERVEO_SUBDOMAIN: ${{ steps.terraform-outputs.outputs.serveo_subdomain }}
+          SERVEO_PORT: ${{ steps.terraform-outputs.outputs.serveo_port }}
           CONNECTION_CMD: ${{ steps.terraform-outputs.outputs.connection_cmd }}
           TASK_ID: ${{ steps.wait-task.outputs.task_id }}
         run: |
           cat >> $GITHUB_STEP_SUMMARY << EOF
           ## Bastion GOTOWY
 
+          ### Polecenie SSH (skopiuj i wklej)
+
+          \`\`\`bash
+          ssh -p ${SERVEO_PORT} root@serveo.net
+          \`\`\`
+
           ### Dane do polaczenia
 
           | Parametr | Wartosc |
           |----------|---------|
-          | Host | \`${SERVEO_SUBDOMAIN}.serveo.net\` |
-          | Port | \`80\` |
-          | Polecenie SSH | \`ssh -p 80 root@${SERVEO_SUBDOMAIN}.serveo.net\` |
+          | Host | \`serveo.net\` |
+          | Port | \`${SERVEO_PORT}\` |
+          | User | \`root\` |
           | Task ID | \`${TASK_ID}\` |
-
-          ### Polecenie SSH (skopiuj i wklej)
-
-          \`\`\`bash
-          ssh -p 80 root@${SERVEO_SUBDOMAIN}.serveo.net
-          \`\`\`
 
           ### Wazne informacje
 
           - Task uruchomiony i stabilny (ECS Service utrzymuje dokladnie 1 task)
-          - Polaczenie: Twoj SSH -> serveo.net:80 -> tunel -> kontener:22 (sshd)
+          - Polaczenie: Twoj SSH -> serveo.net:${SERVEO_PORT} (TCP tunnel) -> kontener:22 (sshd)
           - Aby zatrzymac: uruchom workflow z akcja STOP
 
           ### Troubleshooting
 
           - **Connection refused?** Task moze potrzebowac 30-60s na nawiazanie tunelu Serveo
-          - **Permission denied?** Upewnij sie ze bastion jest RUNNING (sprawdz CloudWatch logi)
           - **Timeout?** Sprawdz CloudWatch logi: \`/ecs/ephemeral-bastion\`
 
           EOF
@@ -500,6 +512,7 @@ jobs:
             -var="region=${{ env.AWS_REGION }}" \
             -var="container_image=000000000000.dkr.ecr.eu-central-1.amazonaws.com/dummy:latest" \
             -var="serveo_subdomain=dummy" \
+            -var="serveo_port=22222" \
             aws_ecs_service.bastion_service \
             "${CLUSTER_NAME}/${SERVICE_NAME}" 2>/dev/null || true
 
@@ -508,7 +521,8 @@ jobs:
             -var="vpc_id=${{ vars.VPC_ID }}" \
             -var="region=${{ env.AWS_REGION }}" \
             -var="container_image=000000000000.dkr.ecr.eu-central-1.amazonaws.com/dummy:latest" \
-            -var="serveo_subdomain=dummy"
+            -var="serveo_subdomain=dummy" \
+            -var="serveo_port=22222"
 
       - name: Potwierdzenie usuniecia (STOP)
         if: github.event.inputs.action == 'STOP'

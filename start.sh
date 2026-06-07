@@ -59,9 +59,11 @@ fi
 echo "[4/4] Nawiązywanie tunelu Serveo.net..."
 
 SERVEO_SUBDOMAIN="${SERVEO_SUBDOMAIN:-ephemeral-bastion}"
-echo "  Żądana subdomena: ${SERVEO_SUBDOMAIN}"
+SERVEO_PORT="${SERVEO_PORT:-22222}"
+echo "  Identyfikator: ${SERVEO_SUBDOMAIN}"
+echo "  Port TCP: ${SERVEO_PORT}"
 
-# Generowanie klucza klienta SSH dla Serveo (potrzebny do rezerwacji subdomeny)
+# Generowanie klucza klienta SSH dla Serveo (potrzebny do połączenia)
 SERVEO_KEY="/tmp/serveo_client_key"
 if [ ! -f "$SERVEO_KEY" ]; then
     ssh-keygen -t ed25519 -f "$SERVEO_KEY" -N "" -q
@@ -70,14 +72,14 @@ fi
 
 echo "=========================================="
 echo " Łączenie z Serveo.net..."
-echo " URL: ssh -p 80 root@${SERVEO_SUBDOMAIN}.serveo.net"
+echo " Polaczenie: ssh -p ${SERVEO_PORT} root@serveo.net"
 echo "=========================================="
 
-# Uruchomienie tunelu SSH do serveo.net
-# -R subdomain:80:localhost:22 - Serveo nasłuchuje na subdomain.serveo.net:80
-#    i przekierowuje ruch TCP na nasz localhost:22 (sshd)
-# -i: klucz klienta (potrzebny do rezerwacji subdomeny)
-# -o StrictHostKeyChecking=accept-new: akceptuje klucz serveo przy pierwszym połączeniu
+# Uruchomienie tunelu TCP do serveo.net
+# -R PORT:localhost:22 - Serveo nasłuchuje na serveo.net:PORT (TCP)
+#    i przekierowuje surowy ruch TCP na nasz localhost:22 (sshd)
+# -i: klucz klienta dla autentykacji z serveo
+# -o StrictHostKeyChecking=accept-new: akceptuje klucz serveo
 # -o UserKnownHostsFile=/dev/null: nie zapisuje known_hosts (ephemeral)
 # -o ServerAliveInterval=60: heartbeat co 60s
 # -o ServerAliveCountMax=3: rozłącz po 3 nieudanych heartbeatach
@@ -85,7 +87,7 @@ echo "=========================================="
 # -N: nie uruchamia shell na zdalnym serwerze
 # -T: nie przydziela pseudo-terminala
 
-exec ssh -R "${SERVEO_SUBDOMAIN}:80:localhost:22" \
+exec ssh -R "${SERVEO_PORT}:localhost:22" \
     -i "$SERVEO_KEY" \
     -o StrictHostKeyChecking=accept-new \
     -o UserKnownHostsFile=/dev/null \

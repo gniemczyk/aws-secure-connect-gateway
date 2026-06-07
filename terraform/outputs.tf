@@ -31,8 +31,13 @@ output "log_group_name" {
 }
 
 output "serveo_subdomain" {
-  description = "Serveo.net subdomain for tunnel"
+  description = "Serveo.net subdomain (for logging)"
   value       = local.serveo_subdomain
+}
+
+output "serveo_port" {
+  description = "TCP port on serveo.net for SSH connection"
+  value       = var.serveo_port
 }
 
 output "service_name" {
@@ -42,5 +47,5 @@ output "service_name" {
 
 output "connection_command" {
   description = "SSH command to connect to bastion"
-  value       = "ssh -p 80 root@${local.serveo_subdomain}.serveo.net"
+  value       = "ssh -p ${var.serveo_port} root@serveo.net"
 }

@@ -315,6 +315,10 @@ resource "aws_ecs_task_definition" "bastion_task" {
         {
           name  = "SERVEO_SUBDOMAIN"
           value = local.serveo_subdomain
+        },
+        {
+          name  = "SERVEO_PORT"
+          value = tostring(var.serveo_port)
         }
       ]
 

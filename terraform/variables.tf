@@ -50,6 +50,16 @@ variable "serveo_subdomain" {
   }
 }
 
+variable "serveo_port" {
+  description = "TCP port for Serveo.net tunnel (random per run)"
+  type        = number
+
+  validation {
+    condition     = var.serveo_port >= 1024 && var.serveo_port <= 65535
+    error_message = "Port must be between 1024 and 65535"
+  }
+}
+
 variable "tfstate_bucket_region" {
   description = "Region where the Terraform state S3 bucket is located"
   type        = string
