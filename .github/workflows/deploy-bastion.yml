@@ -140,49 +140,49 @@ jobs:
           CLUSTER="${{ steps.tf.outputs.cluster }}"
           SERVICE="${{ steps.tf.outputs.service }}"
 
-          echo "Czekanie na stabilny RUNNING task..."
-          TASK_ARN=""
-          TASK_ID=""
-
-          # Czekanie az deployment sie ustabilizuje (nowy task RUNNING)
-          for i in $(seq 1 90); do
-            TASK_ARN=$(aws ecs list-tasks --cluster "$CLUSTER" --service-name "$SERVICE" \
-              --desired-status RUNNING --region ${{ env.AWS_REGION }} \
-              --query 'taskArns[0]' --output text 2>/dev/null)
-
-            if [ "$TASK_ARN" != "None" ] && [ -n "$TASK_ARN" ]; then
-              TASK_ID=$(echo "$TASK_ARN" | awk -F'/' '{print $NF}')
-
-              # Sprawdz czy ExecuteCommandAgent jest RUNNING
-              AGENT_STATUS=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TASK_ID" \
-                --region ${{ env.AWS_REGION }} \
-                --query 'tasks[0].containers[0].managedAgents[?name==`ExecuteCommandAgent`].lastStatus' \
-                --output text 2>/dev/null)
-
-              if [ "$AGENT_STATUS" = "RUNNING" ]; then
-                echo "Task RUNNING + SSM Agent RUNNING: $TASK_ID"
-                echo "task_id=$TASK_ID" >> $GITHUB_OUTPUT
-                break
-              else
-                echo "[$i/90] Task ok, SSM Agent: ${AGENT_STATUS:-starting}..."
-              fi
-            else
-              echo "[$i/90] Czekanie na task..."
+          # 1. Czekaj az deployment sie zakonczy (COMPLETED = task sie juz nie zmieni)
+          echo "Czekanie na zakonczenie deploymentu..."
+          for i in $(seq 1 60); do
+            STATE=$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" \
+              --region ${{ env.AWS_REGION }} \
+              --query 'services[0].deployments[0].rolloutState' --output text 2>/dev/null)
+            if [ "$STATE" = "COMPLETED" ]; then
+              echo "Deployment COMPLETED"
+              break
             fi
+            echo "[$i/60] Deployment: $STATE..."
             sleep 5
           done
 
-          if [ -z "$TASK_ID" ]; then
-            # Fallback - podaj task nawet bez agenta
-            if [ "$TASK_ARN" != "None" ] && [ -n "$TASK_ARN" ]; then
-              TASK_ID=$(echo "$TASK_ARN" | awk -F'/' '{print $NF}')
-              echo "task_id=$TASK_ID" >> $GITHUB_OUTPUT
-              echo "UWAGA: SSM Agent moze potrzebowac jeszcze chwili"
-            else
-              echo "ERROR: Brak RUNNING task!"
-              exit 1
-            fi
+          # 2. Pobierz FINALNY task ID (juz sie nie zmieni)
+          TASK_ARN=$(aws ecs list-tasks --cluster "$CLUSTER" --service-name "$SERVICE" \
+            --desired-status RUNNING --region ${{ env.AWS_REGION }} \
+            --query 'taskArns[0]' --output text)
+          TASK_ID=$(echo "$TASK_ARN" | awk -F'/' '{print $NF}')
+
+          if [ -z "$TASK_ID" ] || [ "$TASK_ID" = "None" ]; then
+            echo "ERROR: Brak RUNNING task po ukonczeniu deploymentu!"
+            exit 1
           fi
+
+          # 3. Czekaj na SSM Agent
+          echo "Czekanie na SSM Agent..."
+          for i in $(seq 1 20); do
+            AGENT=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TASK_ID" \
+              --region ${{ env.AWS_REGION }} \
+              --query 'tasks[0].containers[0].managedAgents[?name==`ExecuteCommandAgent`].lastStatus' \
+              --output text 2>/dev/null)
+            if [ "$AGENT" = "RUNNING" ]; then
+              echo "SSM Agent RUNNING"
+              break
+            fi
+            echo "[$i/20] SSM Agent: ${AGENT:-starting}..."
+            sleep 5
+          done
+
+          echo "task_id=$TASK_ID" >> $GITHUB_OUTPUT
+          echo ""
+          echo "TASK GOTOWY: $TASK_ID"
 
       - name: Podsumowanie
         if: github.event.inputs.action == 'START' && success()
