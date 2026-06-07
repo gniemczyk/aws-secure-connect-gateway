@@ -1,0 +1,253 @@
+name: Efemeryczny Bastion ECS Fargate
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Akcja do wykonania'
+        required: true
+        type: choice
+        options:
+          - START
+          - STOP
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'eu-central-1' }}
+  TFSTATE_REGION: ${{ vars.TFSTATE_REGION || 'eu-north-1' }}
+  TERRAFORM_VERSION: '1.5.7'
+  ECR_REPOSITORY: secure-connect-gateway
+  BASTION_NAME: ephemeral-bastion
+
+jobs:
+  deploy:
+    name: 'Zarządzanie Bastionem'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Pobranie repozytorium
+        uses: actions/checkout@v4
+
+      - name: Konfiguracja AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Instalacja Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Logowanie do ECR
+        if: github.event.inputs.action == 'START'
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+        with:
+          registries: ${{ secrets.AWS_ACCOUNT_ID }}
+
+      - name: Tworzenie repozytorium ECR
+        if: github.event.inputs.action == 'START'
+        run: |
+          aws ecr describe-repositories --repository-names ${{ env.ECR_REPOSITORY }} \
+            --region ${{ env.AWS_REGION }} 2>/dev/null || \
+          aws ecr create-repository --repository-name ${{ env.ECR_REPOSITORY }} \
+            --region ${{ env.AWS_REGION }}
+
+      - name: Budowanie i push obrazu Docker
+        if: github.event.inputs.action == 'START'
+        run: |
+          REGISTRY=${{ steps.login-ecr.outputs.registry }}
+          IMAGE=$REGISTRY/${{ env.ECR_REPOSITORY }}:latest
+          docker build -t $IMAGE .
+          docker push $IMAGE
+          echo "IMAGE_URI=$IMAGE" >> $GITHUB_ENV
+
+      - name: Tworzenie bucketa S3 dla stanu Terraform
+        if: github.event.inputs.action == 'START'
+        run: |
+          aws s3api create-bucket \
+            --bucket secure-connect-gateway-tfstate \
+            --region ${{ env.TFSTATE_REGION }} \
+            --create-bucket-configuration LocationConstraint=${{ env.TFSTATE_REGION }} 2>/dev/null || true
+
+      - name: Inicjalizacja Terraform
+        working-directory: ./terraform
+        run: |
+          terraform init \
+            -backend-config="bucket=secure-connect-gateway-tfstate" \
+            -backend-config="key=terraform.tfstate" \
+            -backend-config="region=${{ env.TFSTATE_REGION }}" \
+            -backend-config="encrypt=true"
+
+      # ===== START =====
+      - name: Import istniejacych zasobow
+        if: github.event.inputs.action == 'START'
+        working-directory: ./terraform
+        run: |
+          TF_VARS="-var=vpc_id=${{ vars.VPC_ID }} -var=region=${{ env.AWS_REGION }} -var=container_image=${{ env.IMAGE_URI }}"
+
+          terraform state rm random_id.serveo_suffix 2>/dev/null || true
+
+          terraform import $TF_VARS \
+            aws_iam_role.ecs_task_execution_role "${{ env.BASTION_NAME }}-exec-role" 2>/dev/null || true
+          terraform import $TF_VARS \
+            aws_iam_role_policy_attachment.ecs_exec_policy "${{ env.BASTION_NAME }}-exec-role/arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy" 2>/dev/null || true
+          terraform import $TF_VARS \
+            aws_iam_role.ecs_task_role "${{ env.BASTION_NAME }}-task-role" 2>/dev/null || true
+          terraform import $TF_VARS \
+            aws_ecs_cluster.bastion_cluster "${{ env.BASTION_NAME }}-cluster" 2>/dev/null || true
+          terraform import $TF_VARS \
+            aws_ecs_service.bastion_service "${{ env.BASTION_NAME }}-cluster/${{ env.BASTION_NAME }}-service" 2>/dev/null || true
+          terraform import $TF_VARS \
+            aws_cloudwatch_log_group.bastion_logs "/ecs/${{ env.BASTION_NAME }}" 2>/dev/null || true
+
+      - name: Wdrozenie infrastruktury
+        if: github.event.inputs.action == 'START'
+        working-directory: ./terraform
+        run: |
+          terraform apply -auto-approve \
+            -var="vpc_id=${{ vars.VPC_ID }}" \
+            -var="region=${{ env.AWS_REGION }}" \
+            -var="container_image=${{ env.IMAGE_URI }}"
+
+      - name: Pobranie danych z Terraform
+        if: github.event.inputs.action == 'START'
+        working-directory: ./terraform
+        id: tf
+        run: |
+          echo "cluster=$(terraform output -raw cluster_name)" >> $GITHUB_OUTPUT
+          echo "service=$(terraform output -raw service_name)" >> $GITHUB_OUTPUT
+          echo "task_def=$(terraform output -raw task_definition_arn)" >> $GITHUB_OUTPUT
+
+      - name: Oczekiwanie na uruchomienie taska
+        if: github.event.inputs.action == 'START'
+        id: task
+        run: |
+          CLUSTER="${{ steps.tf.outputs.cluster }}"
+          SERVICE="${{ steps.tf.outputs.service }}"
+
+          echo "Czekanie na zakonczenie deploymentu..."
+          for i in $(seq 1 60); do
+            STATE=$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" \
+              --region ${{ env.AWS_REGION }} \
+              --query 'services[0].deployments[0].rolloutState' --output text 2>/dev/null)
+            if [ "$STATE" = "COMPLETED" ]; then
+              echo "Deployment COMPLETED"
+              break
+            fi
+            echo "[$i/60] Deployment: $STATE..."
+            sleep 5
+          done
+
+          TASK_ARN=$(aws ecs list-tasks --cluster "$CLUSTER" --service-name "$SERVICE" \
+            --desired-status RUNNING --region ${{ env.AWS_REGION }} \
+            --query 'taskArns[0]' --output text)
+          TASK_ID=$(echo "$TASK_ARN" | awk -F'/' '{print $NF}')
+
+          if [ -z "$TASK_ID" ] || [ "$TASK_ID" = "None" ]; then
+            echo "ERROR: Brak RUNNING task!"
+            exit 1
+          fi
+
+          echo "Czekanie na SSM Agent..."
+          for i in $(seq 1 20); do
+            AGENT=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TASK_ID" \
+              --region ${{ env.AWS_REGION }} \
+              --query 'tasks[0].containers[0].managedAgents[?name==`ExecuteCommandAgent`].lastStatus' \
+              --output text 2>/dev/null)
+            if [ "$AGENT" = "RUNNING" ]; then
+              echo "SSM Agent RUNNING"
+              break
+            fi
+            echo "[$i/20] SSM Agent: ${AGENT:-starting}..."
+            sleep 5
+          done
+
+          echo "task_id=$TASK_ID" >> $GITHUB_OUTPUT
+
+      - name: Podsumowanie
+        if: github.event.inputs.action == 'START' && success()
+        run: |
+          CLUSTER="${{ steps.tf.outputs.cluster }}"
+          TASK_ID="${{ steps.task.outputs.task_id }}"
+          REGION="${{ env.AWS_REGION }}"
+          CMD="aws ecs execute-command --cluster ${CLUSTER} --task ${TASK_ID} --interactive --command \"/bin/sh\" --region ${REGION}"
+
+          echo ""
+          echo "============================================"
+          echo " BASTION GOTOWY - POLACZ SIE KOMENDA:"
+          echo "============================================"
+          echo ""
+          echo "$CMD"
+          echo ""
+          echo "============================================"
+
+          echo "## BASTION GOTOWY" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "$CMD" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+
+      # ===== STOP =====
+      - name: Zatrzymanie serwisu
+        if: github.event.inputs.action == 'STOP'
+        run: |
+          echo "Zatrzymywanie bastionu..."
+          aws ecs update-service \
+            --cluster "${{ env.BASTION_NAME }}-cluster" \
+            --service "${{ env.BASTION_NAME }}-service" \
+            --desired-count 0 \
+            --region ${{ env.AWS_REGION }} > /dev/null 2>&1 || true
+
+          echo "Czekanie na zatrzymanie tasku..."
+          for i in $(seq 1 12); do
+            COUNT=$(aws ecs list-tasks --cluster "${{ env.BASTION_NAME }}-cluster" \
+              --service-name "${{ env.BASTION_NAME }}-service" \
+              --desired-status RUNNING --region ${{ env.AWS_REGION }} \
+              --query 'length(taskArns)' --output text 2>/dev/null || echo "0")
+            if [ "$COUNT" = "0" ]; then
+              echo "Task zatrzymany."
+              break
+            fi
+            echo "[$i/12] Jeszcze dziala ($COUNT tasks)..."
+            sleep 5
+          done
+
+      - name: Usuwanie infrastruktury
+        if: github.event.inputs.action == 'STOP'
+        working-directory: ./terraform
+        run: |
+          TF_VARS="-var=vpc_id=${{ vars.VPC_ID }} -var=region=${{ env.AWS_REGION }} -var=container_image=000000000000.dkr.ecr.eu-central-1.amazonaws.com/x:latest"
+
+          terraform import $TF_VARS \
+            aws_iam_role.ecs_task_execution_role "${{ env.BASTION_NAME }}-exec-role" 2>/dev/null || true
+          terraform import $TF_VARS \
+            aws_iam_role_policy_attachment.ecs_exec_policy "${{ env.BASTION_NAME }}-exec-role/arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy" 2>/dev/null || true
+          terraform import $TF_VARS \
+            aws_iam_role.ecs_task_role "${{ env.BASTION_NAME }}-task-role" 2>/dev/null || true
+          terraform import $TF_VARS \
+            aws_ecs_cluster.bastion_cluster "${{ env.BASTION_NAME }}-cluster" 2>/dev/null || true
+          terraform import $TF_VARS \
+            aws_ecs_service.bastion_service "${{ env.BASTION_NAME }}-cluster/${{ env.BASTION_NAME }}-service" 2>/dev/null || true
+          terraform import $TF_VARS \
+            aws_cloudwatch_log_group.bastion_logs "/ecs/${{ env.BASTION_NAME }}" 2>/dev/null || true
+
+          terraform destroy -auto-approve \
+            -var="vpc_id=${{ vars.VPC_ID }}" \
+            -var="region=${{ env.AWS_REGION }}" \
+            -var="container_image=000000000000.dkr.ecr.eu-central-1.amazonaws.com/x:latest"
+
+      - name: Potwierdzenie zatrzymania
+        if: github.event.inputs.action == 'STOP'
+        run: |
+          echo ""
+          echo "============================================"
+          echo " BASTION ZATRZYMANY"
+          echo "============================================"
+          echo ""
+          echo "## Bastion zatrzymany" >> $GITHUB_STEP_SUMMARY
+          echo "Wszystkie zasoby usuniete. Brak kosztow." >> $GITHUB_STEP_SUMMARY
