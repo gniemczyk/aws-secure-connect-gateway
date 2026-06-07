@@ -95,6 +95,8 @@ jobs:
           terraform import $TF_VARS \
             aws_iam_role.ecs_task_execution_role "${{ env.BASTION_NAME }}-exec-role" 2>/dev/null || true
           terraform import $TF_VARS \
+            aws_iam_role_policy_attachment.ecs_exec_policy "${{ env.BASTION_NAME }}-exec-role/arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy" 2>/dev/null || true
+          terraform import $TF_VARS \
             aws_iam_role.ecs_task_role "${{ env.BASTION_NAME }}-task-role" 2>/dev/null || true
           terraform import $TF_VARS \
             aws_ecs_cluster.bastion_cluster "${{ env.BASTION_NAME }}-cluster" 2>/dev/null || true
