@@ -297,13 +297,8 @@ resource "aws_ecs_task_definition" "bastion_task" {
       # No extra privilege escalation
       privileged = false
 
-      # Minimalne capabilities - NET_BIND_SERVICE dla portu 22, SYS_CHROOT i SETUID/SETGID dla sshd
+      # Fargate - nie mozna dodawac capabilities, usuwamy zbedne
       linuxParameters = {
-        capabilities = {
-          drop = ["ALL"]
-          add  = ["NET_BIND_SERVICE", "SYS_CHROOT", "SETUID", "SETGID", "CHOWN", "DAC_OVERRIDE"]
-        }
-        devices            = []
         initProcessEnabled = true
       }
 
