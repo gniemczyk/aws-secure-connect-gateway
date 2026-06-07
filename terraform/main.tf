@@ -117,14 +117,6 @@ resource "aws_security_group" "bastion_sg" {
   description = "Security Group for ephemeral bastion - outbound only"
   vpc_id      = var.vpc_id
 
-  # Outbound ALL (ECS Exec needs SSM endpoints + general bastion use)
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
   tags = {
     Name        = "${var.bastion_name}-sg"
     Environment = "ephemeral"
@@ -134,6 +126,18 @@ resource "aws_security_group" "bastion_sg" {
 
 locals {
   bastion_sg_id = length(data.aws_security_groups.existing_bastion_sg.ids) > 0 ? data.aws_security_groups.existing_bastion_sg.ids[0] : aws_security_group.bastion_sg[0].id
+}
+
+# Egress rule - ALL protocols/ports (niezaleznie czy SG jest nowy czy istniejacy)
+resource "aws_security_group_rule" "bastion_egress_all" {
+  type              = "egress"
+  from_port         = 0
+  to_port           = 0
+  protocol          = "-1"
+  cidr_blocks       = ["0.0.0.0/0"]
+  security_group_id = local.bastion_sg_id
+
+  depends_on = [aws_security_group.bastion_sg]
 }
 
 # --- ECS ---
