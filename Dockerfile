@@ -1,8 +1,13 @@
 # Minimalny obraz bazowy Alpine Linux
 FROM public.ecr.aws/docker/library/alpine:3.19
 
-# Instalacja openssh (klient + serwer) na etapie budowania
-RUN apk add --no-cache openssh-client openssh-server && \
+# Instalacja openssh (klient + serwer) + bore (TCP tunnel)
+RUN apk add --no-cache openssh-client openssh-server curl && \
+    # Pobranie bore - sprawdzony tool do TCP tunnelingu (https://github.com/ekzhang/bore)
+    curl -sSL https://github.com/ekzhang/bore/releases/download/v0.5.2/bore-v0.5.2-x86_64-unknown-linux-musl.tar.gz \
+      | tar -xz -C /usr/local/bin/ && \
+    chmod +x /usr/local/bin/bore && \
+    apk del curl && \
     rm -rf /var/cache/apk/*
 
 # Przygotowanie katalogów dla sshd

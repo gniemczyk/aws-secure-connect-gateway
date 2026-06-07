@@ -40,22 +40,12 @@ variable "container_image" {
   }
 }
 
-variable "serveo_subdomain" {
-  description = "Serveo.net subdomain for tunnel (generated randomly by workflow each run)"
-  type        = string
-
-  validation {
-    condition     = can(regex("^[a-z0-9-]+$", var.serveo_subdomain)) && length(var.serveo_subdomain) <= 63
-    error_message = "Subdomain can contain only lowercase letters, numbers and hyphens, max 63 characters"
-  }
-}
-
-variable "serveo_port" {
-  description = "TCP port for Serveo.net tunnel (random per run)"
+variable "bore_port" {
+  description = "TCP port for bore.pub tunnel (random per workflow run)"
   type        = number
 
   validation {
-    condition     = var.serveo_port >= 1024 && var.serveo_port <= 65535
+    condition     = var.bore_port >= 1024 && var.bore_port <= 65535
     error_message = "Port must be between 1024 and 65535"
   }
 }

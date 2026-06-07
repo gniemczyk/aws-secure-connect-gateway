@@ -3,16 +3,14 @@ set -e
 
 # ============================================================
 # Ephemeral Bastion - Start Script
-# 1. Generuje klucze SSH (host keys + client key dla Serveo)
-# 2. Konfiguruje authorized_keys z env var
-# 3. Uruchamia sshd
-# 4. Nawiązuje tunel Serveo.net
+# 1. Generuje klucze SSH hosta
+# 2. Uruchamia sshd
+# 3. Nawiązuje tunel TCP przez bore.pub
 # ============================================================
 
 # Trap handler - cleanup przy wyjściu
 cleanup() {
     echo "INFO: Zamykanie bastionu..."
-    # Zatrzymaj sshd jeśli działa
     if [ -f /run/sshd/sshd.pid ]; then
         kill "$(cat /run/sshd/sshd.pid)" 2>/dev/null || true
     fi
@@ -25,75 +23,42 @@ echo " Ephemeral Bastion - Inicjalizacja"
 echo "=========================================="
 
 # --- KROK 1: Generowanie host keys dla sshd ---
-echo "[1/4] Generowanie kluczy hosta SSH..."
+echo "[1/3] Generowanie kluczy hosta SSH..."
 
 if [ ! -f /etc/ssh/ssh_host_ed25519_key ]; then
     ssh-keygen -t ed25519 -f /etc/ssh/ssh_host_ed25519_key -N "" -q
-    echo "  -> Wygenerowano ed25519 host key"
+    echo "  -> ed25519 host key OK"
 fi
 
 if [ ! -f /etc/ssh/ssh_host_rsa_key ]; then
     ssh-keygen -t rsa -b 2048 -f /etc/ssh/ssh_host_rsa_key -N "" -q
-    echo "  -> Wygenerowano rsa host key"
+    echo "  -> rsa host key OK"
 fi
 
-# --- KROK 2: Konfiguracja dostępu ---
-echo "[2/4] Konfiguracja dostepu SSH..."
-echo "  -> Login: ssh -J serveo.net root@<subdomena>"
-echo "  -> Bezposredni dostep (bez hasla)"
-
-# --- KROK 3: Uruchomienie sshd ---
-echo "[3/4] Uruchamianie sshd na porcie 22..."
+# --- KROK 2: Uruchomienie sshd ---
+echo "[2/3] Uruchamianie sshd na porcie 22..."
+echo "  -> Login: root (bez hasla)"
 
 /usr/sbin/sshd -e
-echo "  -> sshd uruchomiony"
-
-# Weryfikacja że sshd działa
 sleep 1
+
 if ! pgrep -x sshd > /dev/null 2>&1; then
-    echo "ERROR: sshd nie uruchomił się!"
+    echo "ERROR: sshd nie uruchomil sie!"
     exit 1
 fi
+echo "  -> sshd dziala"
 
-# --- KROK 4: Tunel Serveo.net ---
-echo "[4/4] Nawiązywanie tunelu Serveo.net..."
+# --- KROK 3: Tunel TCP przez bore.pub ---
+echo "[3/3] Nawiazywanie tunelu TCP..."
 
-SERVEO_SUBDOMAIN="${SERVEO_SUBDOMAIN:-ephemeral-bastion}"
-SERVEO_PORT="${SERVEO_PORT:-22222}"
-echo "  Identyfikator: ${SERVEO_SUBDOMAIN}"
-echo "  Port TCP: ${SERVEO_PORT}"
-
-# Generowanie klucza klienta SSH dla Serveo (potrzebny do połączenia)
-SERVEO_KEY="/tmp/serveo_client_key"
-if [ ! -f "$SERVEO_KEY" ]; then
-    ssh-keygen -t ed25519 -f "$SERVEO_KEY" -N "" -q
-    echo "  -> Wygenerowano klucz klienta dla Serveo"
-fi
+BORE_PORT="${BORE_PORT:-22222}"
+echo "  Port TCP na bore.pub: ${BORE_PORT}"
 
 echo "=========================================="
-echo " Łączenie z Serveo.net..."
-echo " Polaczenie: ssh -p ${SERVEO_PORT} root@serveo.net"
+echo " POLACZENIE:"
+echo " ssh -p ${BORE_PORT} root@bore.pub"
 echo "=========================================="
 
-# Uruchomienie tunelu TCP do serveo.net
-# -R PORT:localhost:22 - Serveo nasłuchuje na serveo.net:PORT (TCP)
-#    i przekierowuje surowy ruch TCP na nasz localhost:22 (sshd)
-# -i: klucz klienta dla autentykacji z serveo
-# -o StrictHostKeyChecking=accept-new: akceptuje klucz serveo
-# -o UserKnownHostsFile=/dev/null: nie zapisuje known_hosts (ephemeral)
-# -o ServerAliveInterval=60: heartbeat co 60s
-# -o ServerAliveCountMax=3: rozłącz po 3 nieudanych heartbeatach
-# -o ExitOnForwardFailure=yes: zakończ jeśli tunel się nie ustanowi
-# -N: nie uruchamia shell na zdalnym serwerze
-# -T: nie przydziela pseudo-terminala
-
-exec ssh -R "${SERVEO_PORT}:localhost:22" \
-    -i "$SERVEO_KEY" \
-    -o StrictHostKeyChecking=accept-new \
-    -o UserKnownHostsFile=/dev/null \
-    -o ServerAliveInterval=60 \
-    -o ServerAliveCountMax=3 \
-    -o ExitOnForwardFailure=yes \
-    -N \
-    -T \
-    serveo.net
+# bore local <local_port> --to <server> --port <remote_port>
+# Tunel TCP: bore.pub:BORE_PORT -> localhost:22 (nasz sshd)
+exec bore local 22 --to bore.pub --port "${BORE_PORT}"

@@ -30,22 +30,17 @@ output "log_group_name" {
   value       = aws_cloudwatch_log_group.bastion_logs.name
 }
 
-output "serveo_subdomain" {
-  description = "Serveo.net subdomain (for logging)"
-  value       = local.serveo_subdomain
-}
-
-output "serveo_port" {
-  description = "TCP port on serveo.net for SSH connection"
-  value       = var.serveo_port
+output "bore_port" {
+  description = "TCP port on bore.pub for SSH connection"
+  value       = var.bore_port
 }
 
 output "service_name" {
-  description = "ECS Service name (pilnuje aby zawsze byl 1 task)"
+  description = "ECS Service name"
   value       = aws_ecs_service.bastion_service.name
 }
 
 output "connection_command" {
   description = "SSH command to connect to bastion"
-  value       = "ssh -p ${var.serveo_port} root@serveo.net"
+  value       = "ssh -p ${var.bore_port} root@bore.pub"
 }

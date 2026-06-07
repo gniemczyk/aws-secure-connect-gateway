@@ -145,41 +145,26 @@ data "aws_security_groups" "existing_bastion_sg" {
   }
 }
 
-# Security Group - inbound blocked, outbound SSH + DNS + HTTPS only
+# Security Group - inbound blocked, outbound for bore.pub + DNS + HTTPS
 resource "aws_security_group" "bastion_sg" {
   count       = length(data.aws_security_groups.existing_bastion_sg.ids) > 0 ? 0 : 1
   name        = "${var.bastion_name}-sg"
-  description = "Security Group for ephemeral bastion - blocked inbound, SSH+DNS+HTTPS outbound"
+  description = "Security Group for ephemeral bastion"
   vpc_id      = var.vpc_id
 
-  # Outbound SSH (port 22) for Serveo.net tunnel
+  # Outbound ALL TCP (bore.pub uses various ports for tunnel)
   egress {
-    from_port   = 22
-    to_port     = 22
+    from_port   = 0
+    to_port     = 65535
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  # Outbound DNS (port 53 TCP+UDP) for name resolution
+  # Outbound DNS (port 53 UDP) for name resolution
   egress {
     from_port   = 53
     to_port     = 53
     protocol    = "udp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  egress {
-    from_port   = 53
-    to_port     = 53
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  # Outbound HTTPS (port 443) for ECR authentication and image pull
-  egress {
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
 
@@ -263,7 +248,7 @@ resource "aws_iam_role_policy_attachment" "ecs_task_execution_role_policy" {
 
 # Computed subdomain (passed from workflow, always fresh random)
 locals {
-  serveo_subdomain = var.serveo_subdomain
+  bore_port = var.bore_port
 }
 
 # ECS Task Definition
@@ -313,12 +298,8 @@ resource "aws_ecs_task_definition" "bastion_task" {
       # Environment variables
       environment = [
         {
-          name  = "SERVEO_SUBDOMAIN"
-          value = local.serveo_subdomain
-        },
-        {
-          name  = "SERVEO_PORT"
-          value = tostring(var.serveo_port)
+          name  = "BORE_PORT"
+          value = tostring(var.bore_port)
         }
       ]
 
