@@ -27,29 +27,29 @@ jobs:
       contents: read
 
     steps:
-      - name: Checkout
+      - name: Pobranie repozytorium
         uses: actions/checkout@v4
 
-      - name: AWS Credentials
+      - name: Konfiguracja AWS
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Setup Terraform
+      - name: Instalacja Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
 
-      - name: Login ECR
+      - name: Logowanie do ECR
         if: github.event.inputs.action == 'START'
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
         with:
           registries: ${{ secrets.AWS_ACCOUNT_ID }}
 
-      - name: Create ECR repo
+      - name: Tworzenie repozytorium ECR
         if: github.event.inputs.action == 'START'
         run: |
           aws ecr describe-repositories --repository-names ${{ env.ECR_REPOSITORY }} \
@@ -57,7 +57,7 @@ jobs:
           aws ecr create-repository --repository-name ${{ env.ECR_REPOSITORY }} \
             --region ${{ env.AWS_REGION }}
 
-      - name: Build and Push image
+      - name: Budowanie i push obrazu Docker
         if: github.event.inputs.action == 'START'
         run: |
           REGISTRY=${{ steps.login-ecr.outputs.registry }}
@@ -66,7 +66,7 @@ jobs:
           docker push $IMAGE
           echo "IMAGE_URI=$IMAGE" >> $GITHUB_ENV
 
-      - name: Create S3 bucket for tfstate
+      - name: Tworzenie bucketa S3 dla stanu Terraform
         if: github.event.inputs.action == 'START'
         run: |
           aws s3api create-bucket \
@@ -74,7 +74,7 @@ jobs:
             --region ${{ env.TFSTATE_REGION }} \
             --create-bucket-configuration LocationConstraint=${{ env.TFSTATE_REGION }} 2>/dev/null || true
 
-      - name: Terraform Init
+      - name: Inicjalizacja Terraform
         working-directory: ./terraform
         run: |
           terraform init \
@@ -84,7 +84,7 @@ jobs:
             -backend-config="encrypt=true"
 
       # ===== START =====
-      - name: Import existing resources
+      - name: Import istniejacych zasobow
         if: github.event.inputs.action == 'START'
         working-directory: ./terraform
         run: |
@@ -105,7 +105,7 @@ jobs:
           terraform import $TF_VARS \
             aws_cloudwatch_log_group.bastion_logs "/ecs/${{ env.BASTION_NAME }}" 2>/dev/null || true
 
-      - name: Terraform Apply
+      - name: Wdrozenie infrastruktury
         if: github.event.inputs.action == 'START'
         working-directory: ./terraform
         run: |
@@ -114,7 +114,7 @@ jobs:
             -var="region=${{ env.AWS_REGION }}" \
             -var="container_image=${{ env.IMAGE_URI }}"
 
-      - name: Get outputs
+      - name: Pobranie danych z Terraform
         if: github.event.inputs.action == 'START'
         working-directory: ./terraform
         id: tf
@@ -123,14 +123,13 @@ jobs:
           echo "service=$(terraform output -raw service_name)" >> $GITHUB_OUTPUT
           echo "task_def=$(terraform output -raw task_definition_arn)" >> $GITHUB_OUTPUT
 
-      - name: Wait for task
+      - name: Oczekiwanie na uruchomienie taska
         if: github.event.inputs.action == 'START'
         id: task
         run: |
           CLUSTER="${{ steps.tf.outputs.cluster }}"
           SERVICE="${{ steps.tf.outputs.service }}"
 
-          # 1. Czekaj az deployment sie zakonczy (COMPLETED = task sie juz nie zmieni)
           echo "Czekanie na zakonczenie deploymentu..."
           for i in $(seq 1 60); do
             STATE=$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" \
@@ -144,18 +143,16 @@ jobs:
             sleep 5
           done
 
-          # 2. Pobierz FINALNY task ID (juz sie nie zmieni)
           TASK_ARN=$(aws ecs list-tasks --cluster "$CLUSTER" --service-name "$SERVICE" \
             --desired-status RUNNING --region ${{ env.AWS_REGION }} \
             --query 'taskArns[0]' --output text)
           TASK_ID=$(echo "$TASK_ARN" | awk -F'/' '{print $NF}')
 
           if [ -z "$TASK_ID" ] || [ "$TASK_ID" = "None" ]; then
-            echo "ERROR: Brak RUNNING task po ukonczeniu deploymentu!"
+            echo "ERROR: Brak RUNNING task!"
             exit 1
           fi
 
-          # 3. Czekaj na SSM Agent
           echo "Czekanie na SSM Agent..."
           for i in $(seq 1 20); do
             AGENT=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TASK_ID" \
@@ -171,8 +168,6 @@ jobs:
           done
 
           echo "task_id=$TASK_ID" >> $GITHUB_OUTPUT
-          echo ""
-          echo "TASK GOTOWY: $TASK_ID"
 
       - name: Podsumowanie
         if: github.event.inputs.action == 'START' && success()
@@ -190,7 +185,6 @@ jobs:
           echo "$CMD"
           echo ""
           echo "============================================"
-          echo ""
 
           echo "## BASTION GOTOWY" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -199,7 +193,7 @@ jobs:
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
 
       # ===== STOP =====
-      - name: Stop service
+      - name: Zatrzymanie serwisu
         if: github.event.inputs.action == 'STOP'
         run: |
           echo "Zatrzymywanie bastionu..."
@@ -223,11 +217,10 @@ jobs:
             sleep 5
           done
 
-      - name: Terraform Destroy
+      - name: Usuwanie infrastruktury
         if: github.event.inputs.action == 'STOP'
         working-directory: ./terraform
         run: |
-          # Import zasobow do state (potrzebne jesli state jest pusty)
           TF_VARS="-var=vpc_id=${{ vars.VPC_ID }} -var=region=${{ env.AWS_REGION }} -var=container_image=000000000000.dkr.ecr.eu-central-1.amazonaws.com/x:latest"
 
           terraform import $TF_VARS \
@@ -248,7 +241,7 @@ jobs:
             -var="region=${{ env.AWS_REGION }}" \
             -var="container_image=000000000000.dkr.ecr.eu-central-1.amazonaws.com/x:latest"
 
-      - name: Potwierdzenie (STOP)
+      - name: Potwierdzenie zatrzymania
         if: github.event.inputs.action == 'STOP'
         run: |
           echo ""
