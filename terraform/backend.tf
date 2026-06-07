@@ -1,5 +1,3 @@
-# Terraform backend and required providers configuration
-
 terraform {
   required_version = ">= 1.0"
 
@@ -10,8 +8,6 @@ terraform {
     }
   }
 
-  # Backend configured via -backend-config flags in workflow
-  # (allows dynamic region from GitHub variables)
   backend "s3" {
   }
 }

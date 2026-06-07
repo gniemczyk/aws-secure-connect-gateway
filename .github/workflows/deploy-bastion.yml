@@ -25,85 +25,55 @@ jobs:
     permissions:
       id-token: write
       contents: read
-      packages: write
 
     steps:
-      - name: Checkout repozytorium
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Konfiguracja AWS credentials przez OIDC
+      - name: AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Instalacja Terraform
+      - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
 
-      - name: Logowanie do Amazon ECR
+      - name: Login ECR
         if: github.event.inputs.action == 'START'
         id: login-ecr
-        timeout-minutes: 5
         uses: aws-actions/amazon-ecr-login@v2
         with:
           registries: ${{ secrets.AWS_ACCOUNT_ID }}
 
-      - name: Create ECR Repository if not exists
+      - name: Create ECR repo
         if: github.event.inputs.action == 'START'
-        timeout-minutes: 5
         run: |
-          if aws ecr describe-repositories \
-            --repository-names ${{ env.ECR_REPOSITORY }} \
-            --region ${{ env.AWS_REGION }} 2>/dev/null; then
-            echo "Repository juz istnieje"
-          else
-            aws ecr create-repository \
-              --repository-name ${{ env.ECR_REPOSITORY }} \
-              --region ${{ env.AWS_REGION }} \
-              --encryption-configuration encryptionType=AES256 \
-              --image-scanning-configuration scanOnPush=true
-          fi
+          aws ecr describe-repositories --repository-names ${{ env.ECR_REPOSITORY }} \
+            --region ${{ env.AWS_REGION }} 2>/dev/null || \
+          aws ecr create-repository --repository-name ${{ env.ECR_REPOSITORY }} \
+            --region ${{ env.AWS_REGION }}
 
-      - name: Build Docker image
-        if: github.event.inputs.action == 'START'
-        run: docker build -t bastion .
-
-      - name: Generate random port
-        if: github.event.inputs.action == 'START'
-        id: params
-        run: |
-          # Losowy port TCP przy KAZDYM uruchomieniu
-          RANDOM_PORT=$(shuf -i 10000-60000 -n 1)
-          echo "port=$RANDOM_PORT" >> $GITHUB_OUTPUT
-          echo "Port TCP: $RANDOM_PORT"
-
-      - name: Push Docker image do Amazon ECR
+      - name: Build and Push image
         if: github.event.inputs.action == 'START'
         run: |
           REGISTRY=${{ steps.login-ecr.outputs.registry }}
-          IMAGE_REPO=$REGISTRY/${{ env.ECR_REPOSITORY }}
-          docker tag bastion $IMAGE_REPO:latest
-          docker push $IMAGE_REPO:latest
-          echo "IMAGE_URI=$IMAGE_REPO:latest" >> $GITHUB_ENV
+          IMAGE=$REGISTRY/${{ env.ECR_REPOSITORY }}:latest
+          docker build -t $IMAGE .
+          docker push $IMAGE
+          echo "IMAGE_URI=$IMAGE" >> $GITHUB_ENV
 
-      - name: Create S3 bucket for Terraform state (if not exists)
+      - name: Create S3 bucket for tfstate
         if: github.event.inputs.action == 'START'
         run: |
-          BUCKET_NAME="secure-connect-gateway-tfstate"
-          REGION="${{ env.TFSTATE_REGION }}"
           aws s3api create-bucket \
-            --bucket "$BUCKET_NAME" \
-            --region "$REGION" \
-            --create-bucket-configuration LocationConstraint="$REGION" 2>/dev/null || true
-          aws s3api put-bucket-versioning \
-            --bucket "$BUCKET_NAME" \
-            --region "$REGION" \
-            --versioning-configuration Status=Enabled 2>/dev/null || true
+            --bucket secure-connect-gateway-tfstate \
+            --region ${{ env.TFSTATE_REGION }} \
+            --create-bucket-configuration LocationConstraint=${{ env.TFSTATE_REGION }} 2>/dev/null || true
 
-      # ===== TERRAFORM =====
       - name: Terraform Init
         working-directory: ./terraform
         run: |
@@ -113,165 +83,116 @@ jobs:
             -backend-config="region=${{ env.TFSTATE_REGION }}" \
             -backend-config="encrypt=true"
 
-      # ===== START FLOW =====
+      # ===== START =====
       - name: Import existing resources
         if: github.event.inputs.action == 'START'
         working-directory: ./terraform
         run: |
-          ROLE_NAME="${{ env.BASTION_NAME }}-exec-role"
-          CLUSTER_NAME="${{ env.BASTION_NAME }}-cluster"
-          SERVICE_NAME="${{ env.BASTION_NAME }}-service"
+          TF_VARS="-var=vpc_id=${{ vars.VPC_ID }} -var=region=${{ env.AWS_REGION }} -var=container_image=${{ env.IMAGE_URI }}"
 
-          # Remove old random_id and serveo-related state
           terraform state rm random_id.serveo_suffix 2>/dev/null || true
 
-          terraform import \
-            -var="vpc_id=${{ vars.VPC_ID }}" \
-            -var="region=${{ env.AWS_REGION }}" \
-            -var="container_image=${{ env.IMAGE_URI }}" \
-            -var="bore_port=${{ steps.params.outputs.port }}" \
-            aws_iam_role.ecs_task_execution_role \
-            "$ROLE_NAME" 2>/dev/null || true
-
-          terraform import \
-            -var="vpc_id=${{ vars.VPC_ID }}" \
-            -var="region=${{ env.AWS_REGION }}" \
-            -var="container_image=${{ env.IMAGE_URI }}" \
-            -var="bore_port=${{ steps.params.outputs.port }}" \
-            aws_ecs_cluster.bastion_cluster \
-            "$CLUSTER_NAME" 2>/dev/null || true
-
-          terraform import \
-            -var="vpc_id=${{ vars.VPC_ID }}" \
-            -var="region=${{ env.AWS_REGION }}" \
-            -var="container_image=${{ env.IMAGE_URI }}" \
-            -var="bore_port=${{ steps.params.outputs.port }}" \
-            aws_ecs_service.bastion_service \
-            "${CLUSTER_NAME}/${SERVICE_NAME}" 2>/dev/null || true
-
-          terraform import \
-            -var="vpc_id=${{ vars.VPC_ID }}" \
-            -var="region=${{ env.AWS_REGION }}" \
-            -var="container_image=${{ env.IMAGE_URI }}" \
-            -var="bore_port=${{ steps.params.outputs.port }}" \
-            aws_cloudwatch_log_group.bastion_logs \
-            "/ecs/${{ env.BASTION_NAME }}" 2>/dev/null || true
+          terraform import $TF_VARS \
+            aws_iam_role.ecs_task_execution_role "${{ env.BASTION_NAME }}-exec-role" 2>/dev/null || true
+          terraform import $TF_VARS \
+            aws_iam_role.ecs_task_role "${{ env.BASTION_NAME }}-task-role" 2>/dev/null || true
+          terraform import $TF_VARS \
+            aws_ecs_cluster.bastion_cluster "${{ env.BASTION_NAME }}-cluster" 2>/dev/null || true
+          terraform import $TF_VARS \
+            aws_ecs_service.bastion_service "${{ env.BASTION_NAME }}-cluster/${{ env.BASTION_NAME }}-service" 2>/dev/null || true
+          terraform import $TF_VARS \
+            aws_cloudwatch_log_group.bastion_logs "/ecs/${{ env.BASTION_NAME }}" 2>/dev/null || true
 
       - name: Terraform Apply
         if: github.event.inputs.action == 'START'
         working-directory: ./terraform
         run: |
-          terraform plan -out=tfplan \
+          terraform apply -auto-approve \
             -var="vpc_id=${{ vars.VPC_ID }}" \
             -var="region=${{ env.AWS_REGION }}" \
-            -var="container_image=${{ env.IMAGE_URI }}" \
-            -var="bore_port=${{ steps.params.outputs.port }}"
-          terraform apply tfplan
+            -var="container_image=${{ env.IMAGE_URI }}"
 
-      - name: Pobranie outputow Terraform
+      - name: Get outputs
         if: github.event.inputs.action == 'START'
         working-directory: ./terraform
         id: tf
         run: |
-          echo "cluster_name=$(terraform output -raw cluster_name)" >> $GITHUB_OUTPUT
-          echo "task_def_arn=$(terraform output -raw task_definition_arn)" >> $GITHUB_OUTPUT
-          echo "log_group=$(terraform output -raw log_group_name)" >> $GITHUB_OUTPUT
-          echo "bore_port=$(terraform output -raw bore_port)" >> $GITHUB_OUTPUT
-          echo "service_name=$(terraform output -raw service_name)" >> $GITHUB_OUTPUT
-          echo "connection_cmd=$(terraform output -raw connection_command)" >> $GITHUB_OUTPUT
+          echo "cluster=$(terraform output -raw cluster_name)" >> $GITHUB_OUTPUT
+          echo "service=$(terraform output -raw service_name)" >> $GITHUB_OUTPUT
+          echo "task_def=$(terraform output -raw task_definition_arn)" >> $GITHUB_OUTPUT
 
-      - name: Update ECS Service
+      - name: Deploy new task
         if: github.event.inputs.action == 'START'
         run: |
           aws ecs update-service \
-            --cluster "${{ steps.tf.outputs.cluster_name }}" \
-            --service "${{ steps.tf.outputs.service_name }}" \
-            --task-definition "${{ steps.tf.outputs.task_def_arn }}" \
+            --cluster "${{ steps.tf.outputs.cluster }}" \
+            --service "${{ steps.tf.outputs.service }}" \
+            --task-definition "${{ steps.tf.outputs.task_def }}" \
             --force-new-deployment \
-            --region "${{ env.AWS_REGION }}" > /dev/null
-          echo "Service update triggered (stop old -> start new, max 1 task)"
+            --region ${{ env.AWS_REGION }} > /dev/null
 
-      - name: Oczekiwanie na task
+      - name: Wait for task
         if: github.event.inputs.action == 'START'
-        id: wait-task
+        id: task
         run: |
-          CLUSTER="${{ steps.tf.outputs.cluster_name }}"
-          SERVICE="${{ steps.tf.outputs.service_name }}"
+          CLUSTER="${{ steps.tf.outputs.cluster }}"
+          SERVICE="${{ steps.tf.outputs.service }}"
 
-          echo "Oczekiwanie na RUNNING task..."
-          for i in $(seq 1 90); do
-            TASK_ARN=$(aws ecs list-tasks \
-              --cluster "$CLUSTER" --service-name "$SERVICE" \
+          echo "Czekanie na RUNNING task..."
+          TASK_ARN=""
+          for i in $(seq 1 60); do
+            TASK_ARN=$(aws ecs list-tasks --cluster "$CLUSTER" --service-name "$SERVICE" \
               --desired-status RUNNING --region ${{ env.AWS_REGION }} \
-              --query 'taskArns[0]' --output text 2>/dev/null || echo "None")
+              --query 'taskArns[0]' --output text 2>/dev/null)
 
             if [ "$TASK_ARN" != "None" ] && [ -n "$TASK_ARN" ]; then
-              STATUS=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TASK_ARN" \
-                --region ${{ env.AWS_REGION }} --query 'tasks[0].lastStatus' --output text)
-              echo "[$i/90] Task status: $STATUS"
-              if [ "$STATUS" = "RUNNING" ]; then
-                TASK_ID=$(echo "$TASK_ARN" | awk -F'/' '{print $NF}')
-                echo "task_id=$TASK_ID" >> $GITHUB_OUTPUT
-                echo "Task RUNNING! Czekanie 20s na tunel bore..."
-                sleep 20
-                break
-              fi
-            else
-              echo "[$i/90] Czekanie..."
+              echo "Task RUNNING: $TASK_ARN"
+              break
             fi
-            sleep 3
+            echo "[$i/60] czekanie..."
+            sleep 5
           done
 
-          if [ -z "$TASK_ID" ]; then
+          if [ -z "$TASK_ARN" ] || [ "$TASK_ARN" = "None" ]; then
             echo "ERROR: Task nie uruchomil sie!"
             exit 1
           fi
 
-      - name: Sprawdzenie logow
-        if: github.event.inputs.action == 'START'
-        run: |
-          LOG_GROUP="${{ steps.tf.outputs.log_group }}"
-          sleep 5
+          TASK_ID=$(echo "$TASK_ARN" | awk -F'/' '{print $NF}')
+          echo "task_id=$TASK_ID" >> $GITHUB_OUTPUT
 
-          STREAM=$(aws logs describe-log-streams \
-            --log-group-name "$LOG_GROUP" --order-by LastEventTime \
-            --descending --max-items 1 \
-            --query 'logStreams[0].logStreamName' --output text 2>/dev/null || echo "None")
-
-          if [ "$STREAM" != "None" ] && [ -n "$STREAM" ]; then
-            echo "=== CloudWatch Logs ==="
-            aws logs get-log-events \
-              --log-group-name "$LOG_GROUP" --log-stream-name "$STREAM" \
-              --limit 30 --query 'events[*].message' --output text 2>/dev/null || echo "Brak"
-          else
-            echo "Brak log stream"
-          fi
+          # Verify ECS Exec works
+          echo "Sprawdzanie ECS Exec..."
+          sleep 10
+          aws ecs execute-command \
+            --cluster "$CLUSTER" \
+            --task "$TASK_ID" \
+            --interactive \
+            --command "echo OK" \
+            --region ${{ env.AWS_REGION }} > /dev/null 2>&1 || echo "ECS Exec moze potrzebowac chwili..."
 
       - name: Podsumowanie
         if: github.event.inputs.action == 'START' && success()
-        env:
-          BORE_PORT: ${{ steps.tf.outputs.bore_port }}
-          TASK_ID: ${{ steps.wait-task.outputs.task_id }}
         run: |
-          echo "## Bastion GOTOWY" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Polaczenie SSH:" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          echo "ssh -p ${BORE_PORT} root@bore.pub" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Parametr | Wartosc |" >> $GITHUB_STEP_SUMMARY
-          echo "|----------|---------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Host | bore.pub |" >> $GITHUB_STEP_SUMMARY
-          echo "| Port | ${BORE_PORT} |" >> $GITHUB_STEP_SUMMARY
-          echo "| User | root |" >> $GITHUB_STEP_SUMMARY
-          echo "| Task ID | ${TASK_ID} |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Aby zatrzymac: uruchom workflow z akcja STOP" >> $GITHUB_STEP_SUMMARY
+          CLUSTER="${{ steps.tf.outputs.cluster }}"
+          TASK_ID="${{ steps.task.outputs.task_id }}"
+          REGION="${{ env.AWS_REGION }}"
 
-      # ===== STOP FLOW =====
-      - name: Scale down ECS Service (STOP)
+          echo "## BASTION GOTOWY" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Polacz sie komenda:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "aws ecs execute-command --cluster ${CLUSTER} --task ${TASK_ID} --interactive --command \"/bin/sh\" --region ${REGION}" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Task ID: \`${TASK_ID}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "Aby zatrzymac: uruchom workflow z akcja **STOP**" >> $GITHUB_STEP_SUMMARY
+
+      # ===== STOP =====
+      - name: Stop service
         if: github.event.inputs.action == 'STOP'
         run: |
           aws ecs update-service \
@@ -279,32 +200,24 @@ jobs:
             --service "${{ env.BASTION_NAME }}-service" \
             --desired-count 0 \
             --region ${{ env.AWS_REGION }} > /dev/null 2>&1 || true
-          echo "Service scaled to 0, waiting..."
           sleep 15
 
-      - name: Terraform Destroy (STOP)
+      - name: Terraform Destroy
         if: github.event.inputs.action == 'STOP'
         working-directory: ./terraform
         run: |
-          CLUSTER_NAME="${{ env.BASTION_NAME }}-cluster"
-          SERVICE_NAME="${{ env.BASTION_NAME }}-service"
-
           terraform import \
             -var="vpc_id=${{ vars.VPC_ID }}" \
             -var="region=${{ env.AWS_REGION }}" \
-            -var="container_image=000000000000.dkr.ecr.eu-central-1.amazonaws.com/dummy:latest" \
-            -var="bore_port=22222" \
+            -var="container_image=000000000000.dkr.ecr.eu-central-1.amazonaws.com/x:latest" \
             aws_ecs_service.bastion_service \
-            "${CLUSTER_NAME}/${SERVICE_NAME}" 2>/dev/null || true
+            "${{ env.BASTION_NAME }}-cluster/${{ env.BASTION_NAME }}-service" 2>/dev/null || true
 
           terraform destroy -auto-approve \
             -var="vpc_id=${{ vars.VPC_ID }}" \
             -var="region=${{ env.AWS_REGION }}" \
-            -var="container_image=000000000000.dkr.ecr.eu-central-1.amazonaws.com/dummy:latest" \
-            -var="bore_port=22222"
+            -var="container_image=000000000000.dkr.ecr.eu-central-1.amazonaws.com/x:latest"
 
       - name: Potwierdzenie (STOP)
         if: github.event.inputs.action == 'STOP'
-        run: |
-          echo "## Bastion usuniety" >> $GITHUB_STEP_SUMMARY
-          echo "Wszystkie zasoby usuniete." >> $GITHUB_STEP_SUMMARY
+        run: echo "## Bastion usuniety" >> $GITHUB_STEP_SUMMARY
