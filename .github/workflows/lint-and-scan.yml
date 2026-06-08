@@ -1,6 +1,7 @@
 name: Walidacja i Bezpieczenstwo (CI)
 
 on:
+  workflow_dispatch: # Mozliwosc recznego uruchomienia z GitHub Actions UI
   push:
     branches: [ main, master ]
   pull_request:
