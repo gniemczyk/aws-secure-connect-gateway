@@ -36,9 +36,24 @@ CLUSTER_NAME="${CLUSTER_NAME:-ephemeral-bastion-cluster}"
 SERVICE_NAME="${SERVICE_NAME:-ephemeral-bastion-service}"
 
 # Wykrywanie regionu AWS
-AWS_REGION=$(aws configure get region 2>/dev/null || echo "")
+CONFIG_REGION=$(aws configure get region 2>/dev/null || echo "")
+
+if [ -n "$CONFIG_REGION" ]; then
+    echo -e "Wykryto region z konfiguracji AWS CLI: ${GREEN}$CONFIG_REGION${NC}"
+    read -rp "Czy użyć tego regionu? (T/n): " USE_CONFIG
+    if [[ "$USE_CONFIG" =~ ^[Nn]$ ]]; then
+        read -rp "Wprowadź region AWS (np. eu-central-1, eu-north-1): " AWS_REGION
+    else
+        AWS_REGION="$CONFIG_REGION"
+    fi
+else
+    echo -e "${YELLOW}Nie wykryto regionu w konfiguracji AWS CLI${NC}"
+    read -rp "Wprowadź region AWS (np. eu-central-1, eu-north-1): " AWS_REGION
+fi
+
 if [ -z "$AWS_REGION" ]; then
     AWS_REGION="eu-central-1"
+    echo -e "${YELLOW}Użyto domyślnego regionu: eu-central-1${NC}"
 fi
 
 echo -e "Region AWS: ${GREEN}$AWS_REGION${NC}"
