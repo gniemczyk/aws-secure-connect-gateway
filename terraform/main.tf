@@ -1,10 +1,10 @@
-# Główna konfiguracja Terraform dla efemerycznego bastionu ECS Fargate
+# Glowna konfiguracja Terraform dla efemerycznego bastionu ECS Fargate
 
 provider "aws" {
   region = var.region
 }
 
-# --- NETWORKING ---
+# --- SIEC ---
 
 data "aws_vpc" "selected" {
   id = var.vpc_id
@@ -17,7 +17,7 @@ data "aws_internet_gateway" "selected" {
   }
 }
 
-# Find existing bastion subnet
+# Znajdz istniejaca podsiec bastionu
 data "aws_subnets" "existing_bastion" {
   filter {
     name   = "vpc-id"
@@ -51,8 +51,8 @@ data "aws_availability_zones" "available" {
 }
 
 locals {
-  vpc_cidr       = data.aws_vpc.selected.cidr_block
-  existing_cidrs = toset([for subnet in data.aws_subnet.existing : subnet.cidr_block])
+  vpc_cidr           = data.aws_vpc.selected.cidr_block
+  existing_cidrs     = toset([for subnet in data.aws_subnet.existing : subnet.cidr_block])
   all_possible_cidrs = [for idx in range(0, 256) : cidrsubnet(local.vpc_cidr, 8, idx)]
   available_cidrs    = [for cidr in local.all_possible_cidrs : cidr if !contains(local.existing_cidrs, cidr)]
   new_subnet_cidr    = length(local.available_cidrs) > 0 ? local.available_cidrs[0] : local.all_possible_cidrs[0]
@@ -76,7 +76,7 @@ locals {
   bastion_subnet_id = length(data.aws_subnets.existing_bastion.ids) > 0 ? data.aws_subnets.existing_bastion.ids[0] : aws_subnet.bastion_subnet[0].id
 }
 
-# --- ROUTE TABLE ---
+# --- TABELA TRAS ---
 
 resource "aws_route_table" "bastion_rt" {
   vpc_id = var.vpc_id
@@ -98,7 +98,7 @@ resource "aws_route_table_association" "bastion_rt_assoc" {
   route_table_id = aws_route_table.bastion_rt.id
 }
 
-# --- SECURITY GROUP ---
+# --- GRUPA ZABEZPIECZEN ---
 
 data "aws_security_groups" "existing_bastion_sg" {
   filter {
@@ -128,7 +128,7 @@ locals {
   bastion_sg_id = length(data.aws_security_groups.existing_bastion_sg.ids) > 0 ? data.aws_security_groups.existing_bastion_sg.ids[0] : aws_security_group.bastion_sg[0].id
 }
 
-# Egress rule - ALL protocols/ports (niezaleznie czy SG jest nowy czy istniejacy)
+# Regula wyjsciowa (egress) - WSZYSTKIE protokoly/porty (niezaleznie czy SG jest nowy czy istniejacy)
 resource "aws_security_group_rule" "bastion_egress_all" {
   type              = "egress"
   from_port         = 0
@@ -148,6 +148,17 @@ resource "aws_ecs_cluster" "bastion_cluster" {
   setting {
     name  = "containerInsights"
     value = "enabled"
+  }
+
+  configuration {
+    execute_command_configuration {
+      logging = "OVERRIDE"
+
+      log_configuration {
+        cloud_watch_encryption_enabled = false
+        cloud_watch_log_group_name     = aws_cloudwatch_log_group.ecs_exec_logs.name
+      }
+    }
   }
 
   tags = {
@@ -170,9 +181,23 @@ resource "aws_cloudwatch_log_group" "bastion_logs" {
   }
 }
 
+resource "aws_cloudwatch_log_group" "ecs_exec_logs" {
+  name              = "/ecs/${var.bastion_name}-exec"
+  retention_in_days = 1
+
+  tags = {
+    Environment = "ephemeral"
+    ManagedBy   = "terraform"
+  }
+
+  lifecycle {
+    ignore_changes = [retention_in_days]
+  }
+}
+
 # --- IAM ---
 
-# Task Execution Role (pulling images, writing logs)
+# Rola wykonawcza zadania (Task Execution Role) - pobieranie obrazow, zapisywanie logow
 data "aws_iam_policy_document" "ecs_assume" {
   statement {
     effect  = "Allow"
@@ -199,7 +224,7 @@ resource "aws_iam_role_policy_attachment" "ecs_exec_policy" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
-# Task Role (what the container can do - needs SSM for ECS Exec)
+# Rola zadania (Task Role) - uprawnienia kontenera, wymaga SSM dla ECS Exec
 resource "aws_iam_role" "ecs_task_role" {
   name               = "${var.bastion_name}-task-role"
   assume_role_policy = data.aws_iam_policy_document.ecs_assume.json
@@ -210,7 +235,7 @@ resource "aws_iam_role" "ecs_task_role" {
   }
 }
 
-# SSM permissions for ECS Exec
+# Uprawnienia SSM dla ECS Exec
 resource "aws_iam_role_policy" "ecs_exec_ssm" {
   name = "${var.bastion_name}-ssm-policy"
   role = aws_iam_role.ecs_task_role.id
@@ -227,12 +252,30 @@ resource "aws_iam_role_policy" "ecs_exec_ssm" {
           "ssmmessages:OpenDataChannel"
         ]
         Resource = "*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "logs:DescribeLogGroups"
+        ]
+        Resource = "*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogStream",
+          "logs:PutLogEvents",
+          "logs:DescribeLogStreams"
+        ]
+        Resource = [
+          "${aws_cloudwatch_log_group.ecs_exec_logs.arn}:*"
+        ]
       }
     ]
   })
 }
 
-# --- ECS TASK DEFINITION ---
+# --- DEFINICJA ZADANIA ECS ---
 
 resource "aws_ecs_task_definition" "bastion_task" {
   family                   = "${var.bastion_name}-task"
@@ -270,20 +313,20 @@ resource "aws_ecs_task_definition" "bastion_task" {
   }
 }
 
-# --- ECS SERVICE (exactly 1 task, ECS Exec enabled) ---
+# --- SERWIS ECS (dokladnie 1 zadanie, ECS Exec wlaczony) ---
 
 resource "aws_ecs_service" "bastion_service" {
-  name            = "${var.bastion_name}-service"
-  cluster         = aws_ecs_cluster.bastion_cluster.id
-  task_definition = aws_ecs_task_definition.bastion_task.arn
-  desired_count   = 1
-  launch_type     = "FARGATE"
+  name             = "${var.bastion_name}-service"
+  cluster          = aws_ecs_cluster.bastion_cluster.id
+  task_definition  = aws_ecs_task_definition.bastion_task.arn
+  desired_count    = 1
+  launch_type      = "FARGATE"
   platform_version = "LATEST"
 
-  # ECS Exec - pozwala na polaczenie przez aws ecs execute-command
+  # ECS Exec - umozliwia polaczenie przez aws ecs execute-command
   enable_execute_command = true
 
-  # Max 1 task: stop old first, then start new
+  # Maksymalnie 1 zadanie: najpierw zatrzymaj stare, potem uruchom nowe
   deployment_minimum_healthy_percent = 0
   deployment_maximum_percent         = 100
 
@@ -303,4 +346,71 @@ resource "aws_ecs_service" "bastion_service" {
     aws_cloudwatch_log_group.bastion_logs,
     aws_route_table_association.bastion_rt_assoc
   ]
+}
+
+# --- HARMONOGRAM AUTO-STOP ---
+
+resource "aws_iam_role" "scheduler_role" {
+  name = "${var.bastion_name}-scheduler-role"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Service = "scheduler.amazonaws.com"
+        }
+        Action = "sts:AssumeRole"
+      }
+    ]
+  })
+
+  tags = {
+    Environment = "ephemeral"
+    ManagedBy   = "terraform"
+  }
+}
+
+resource "aws_iam_role_policy" "scheduler_ecs_policy" {
+  name = "${var.bastion_name}-scheduler-ecs-policy"
+  role = aws_iam_role.scheduler_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "ecs:UpdateService"
+        ]
+        Resource = [
+          aws_ecs_service.bastion_service.id
+        ]
+      }
+    ]
+  })
+}
+
+resource "aws_scheduler_schedule" "auto_stop" {
+  name       = "${var.bastion_name}-auto-stop"
+  group_name = "default"
+
+  flexible_time_window {
+    mode = "OFF"
+  }
+
+  # Harmonogram cyklicznego zadania cron (np. codziennie o 23:00 UTC)
+  schedule_expression          = var.auto_stop_cron
+  schedule_expression_timezone = "UTC"
+
+  target {
+    arn      = "arn:aws:scheduler:::aws-sdk:ecs:updateService"
+    role_arn = aws_iam_role.scheduler_role.arn
+
+    input = jsonencode({
+      Cluster      = aws_ecs_cluster.bastion_cluster.name
+      Service      = aws_ecs_service.bastion_service.name
+      DesiredCount = 0
+    })
+  }
 }

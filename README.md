@@ -4,10 +4,11 @@ Efemeryczny bastion oparty na AWS ECS Fargate z dostępem przez ECS Exec (AWS Sy
 
 ## Jak działa
 
-1. GitHub Workflow uruchamia kontener w ECS Fargate (wewnątrz Twojego VPC)
-2. Łączysz się przez `aws ecs execute-command` (SSM Session Manager)
-3. Masz shell wewnątrz VPC - możesz łączyć się do baz danych, serwisów itp.
-4. Workflow STOP usuwa wszystkie zasoby
+1. GitHub Workflow uruchamia kontener w ECS Fargate (wewnątrz Twojego VPC). Przy uruchomieniu można zdefiniować wyrażenie cron dla czasu wyłączenia.
+2. Automatycznie tworzona jest reguła **AWS EventBridge Scheduler**, która wyłączy bastion o wybranej godzinie (domyślnie codziennie o 23:00 UTC), chroniąc przed generowaniem kosztów przez noc.
+3. Łączysz się za pomocą lokalnego skryptu `./connect.sh` (oferuje menu z opcjami interaktywnej sesji shell lub tunelu port forwarding bezpośrednio na Twój komputer).
+4. Wszystkie polecenia wpisywane w sesjach są audytowane i zapisywane w **AWS CloudWatch Logs**.
+5. Ręczne wywołanie workflow **STOP** (lub automatyczny harmonogram) zatrzymuje/usuwa tymczasowe zasoby.
 
 ```
 Twój komputer
@@ -155,21 +156,33 @@ ncat -zv 127.0.0.1 5432
 psql -h 127.0.0.1 -U admin -d mydb
 ```
 
-**Dostępne narzędzia w bastionie:** `socat`, `ncat`, `curl`, `dig`, `psql`, `mysql`, `redis-cli`
+**Dostępne narzędzia w bastionie:** `socat`, `ncat`, `curl`, `dig`, `psql`, `mysql`, `redis-cli`, `aws-cli`, `openssl`, `vim`, `nano`, `net-tools`, `iproute2`, `tcpdump`
+
+#### 3. Lokalne tunelowanie bezpośrednio na Twój komputer (SSM Port Forwarding)
+
+Zamiast przekierowywać porty wewnątrz kontenera za pomocą `socat` i uruchamiać klientów bezpośrednio w bastionie, możesz przekierować porty bezpośrednio ze swojego komputera do dowolnego zasobu w VPC (np. RDS) za pomocą tunelu SSM Session Manager. Ułatwia to używanie lokalnych narzędzi GUI (np. DBeaver, pgAdmin, Redis Insight).
+
+Aby to zrobić, uruchom lokalnie skrypt:
+```bash
+./connect.sh
+```
+Wybierz opcję `2) Port Forwarding` i podaj dane hosta docelowego w VPC (np. endpoint bazy danych) oraz porty. Skrypt automatycznie zestawi bezpieczny tunel.
 
 ## Struktura projektu
 
 ```
 .
 ├── .github/workflows/
-│   └── deploy-bastion.yml    # GitHub Actions workflow
+│   ├── deploy-bastion.yml    # GitHub Actions workflow (START/STOP)
+│   └── lint-and-scan.yml     # Workflow CI (format, validate, Trivy)
 ├── terraform/
 │   ├── backend.tf            # S3 backend
-│   ├── main.tf               # ECS, IAM, networking
+│   ├── main.tf               # ECS, IAM, networking, EventBridge Scheduler
 │   ├── variables.tf          # Zmienne
 │   └── outputs.tf            # Outputy
-├── Dockerfile                # Alpine + narzędzia sieciowe
+├── Dockerfile                # Alpine + dodatkowe narzędzia (aws-cli, vim, tcpdump, etc.)
 ├── start.sh                  # Keepalive script
+├── connect.sh                # Lokalny skrypt do wygodnego łączenia i tunelowania portów (SSM)
 └── README.md
 ```
 
