@@ -296,6 +296,14 @@ resource "aws_ecs_task_definition" "bastion_task" {
         initProcessEnabled = true
       }
 
+      healthCheck = {
+        command     = ["CMD-SHELL", "pgrep -f start.sh || exit 1"]
+        interval    = 30
+        timeout     = 5
+        retries     = 3
+        startPeriod = 60
+      }
+
       logConfiguration = {
         logDriver = "awslogs"
         options = {
@@ -412,5 +420,10 @@ resource "aws_scheduler_schedule" "auto_stop" {
       Service      = aws_ecs_service.bastion_service.name
       DesiredCount = 0
     })
+  }
+
+  retry_policy {
+    maximum_retry_attempts = 3
+    retry_after_seconds    = 60
   }
 }

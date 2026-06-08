@@ -35,8 +35,37 @@ fi
 CLUSTER_NAME="${CLUSTER_NAME:-ephemeral-bastion-cluster}"
 SERVICE_NAME="${SERVICE_NAME:-ephemeral-bastion-service}"
 
+# Wykrywanie profilu AWS
+AWS_PROFILES=$(aws configure list-profiles 2>/dev/null || echo "")
+
+if [ -n "$AWS_PROFILES" ]; then
+    echo -e "Dostępne profile AWS:"
+    echo "$AWS_PROFILES" | nl
+    read -rp "Wybierz numer profilu (lub wciśnij Enter dla domyślnego): " PROFILE_NUM
+
+    if [ -n "$PROFILE_NUM" ] && [[ "$PROFILE_NUM" =~ ^[0-9]+$ ]]; then
+        AWS_PROFILE=$(echo "$AWS_PROFILES" | sed -n "${PROFILE_NUM}p")
+        echo -e "Wybrany profil: ${GREEN}$AWS_PROFILE${NC}"
+    else
+        AWS_PROFILE=""
+        echo -e "Użyto domyślnego profilu AWS"
+    fi
+else
+    AWS_PROFILE=""
+    echo -e "${YELLOW}Nie wykryto profili AWS, użyto domyślnego${NC}"
+fi
+
+# Funkcja pomocnicza do wywoływania aws z profilem
+aws_cmd() {
+    if [ -n "$AWS_PROFILE" ]; then
+        aws --profile "$AWS_PROFILE" "$@"
+    else
+        aws "$@"
+    fi
+}
+
 # Wykrywanie regionu AWS
-CONFIG_REGION=$(aws configure get region 2>/dev/null || echo "")
+CONFIG_REGION=$(aws_cmd configure get region 2>/dev/null || echo "")
 
 if [ -n "$CONFIG_REGION" ]; then
     echo -e "Wykryto region z konfiguracji AWS CLI: ${GREEN}$CONFIG_REGION${NC}"
@@ -61,7 +90,7 @@ echo -e "Klaster ECS: ${GREEN}$CLUSTER_NAME${NC}"
 
 # 3. Pobranie aktywnego taska ECS
 echo -e "Szukanie działającego kontenera bastionu..."
-TASK_ARN=$(aws ecs list-tasks \
+TASK_ARN=$(aws_cmd ecs list-tasks \
     --cluster "$CLUSTER_NAME" \
     --service-name "$SERVICE_NAME" \
     --desired-status RUNNING \
@@ -79,7 +108,7 @@ TASK_ID=$(echo "$TASK_ARN" | awk -F'/' '{print $NF}')
 echo -e "Znaleziono aktywny Task ID: ${GREEN}$TASK_ID${NC}"
 
 # 4. Pobranie runtime ID kontenera (potrzebne do SSM Port Forwarding)
-CONTAINER_INFO=$(aws ecs describe-tasks \
+CONTAINER_INFO=$(aws_cmd ecs describe-tasks \
     --cluster "$CLUSTER_NAME" \
     --tasks "$TASK_ID" \
     --region "$AWS_REGION" \
@@ -105,7 +134,7 @@ case "$OPTION" in
     1)
         echo -e "\n${GREEN}Nawiązywanie połączenia shell z kontenerem...${NC}"
         echo -e "Wpisz 'exit' aby zakończyć sesję."
-        aws ecs execute-command \
+        aws_cmd ecs execute-command \
             --cluster "$CLUSTER_NAME" \
             --task "$TASK_ID" \
             --container "$CONTAINER_NAME" \
@@ -124,8 +153,8 @@ case "$OPTION" in
         echo -e "\n${GREEN}Uruchamianie tunelu SSM...${NC}"
         echo -e "Możesz teraz połączyć się z ${YELLOW}localhost:${LOCAL_PORT}${NC} -> ${GREEN}${REMOTE_HOST}:${REMOTE_PORT}${NC}"
         echo -e "Wciśnij Ctrl+C aby zamknąć tunel."
-        
-        aws ssm start-session \
+
+        aws_cmd ssm start-session \
             --target "$SSM_TARGET" \
             --document-name AWS-StartPortForwardingSessionToRemoteHost \
             --parameters "{\"portNumber\":[\"$REMOTE_PORT\"],\"localPortNumber\":[\"$LOCAL_PORT\"],\"host\":[\"$REMOTE_HOST\"]}" \
