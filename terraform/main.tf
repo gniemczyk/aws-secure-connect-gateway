@@ -358,15 +358,22 @@ resource "aws_ecs_service" "bastion_service" {
 
 # --- HARMONOGRAM AUTO-STOP ---
 
-resource "aws_iam_role" "scheduler_role" {
-  name = "${var.bastion_name}-scheduler-role"
+# Lambda do zatrzymania serwisu ECS
+data "archive_file" "lambda_zip" {
+  type        = "zip"
+  source_file = "${path.module}/lambda_stop.py"
+  output_path = "${path.module}/lambda_stop.zip"
+}
+
+resource "aws_iam_role" "lambda_role" {
+  name = "${var.bastion_name}-lambda-role"
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
       {
         Effect = "Allow"
         Principal = {
-          Service = "scheduler.amazonaws.com"
+          Service = "lambda.amazonaws.com"
         }
         Action = "sts:AssumeRole"
       }
@@ -379,9 +386,9 @@ resource "aws_iam_role" "scheduler_role" {
   }
 }
 
-resource "aws_iam_role_policy" "scheduler_ecs_policy" {
-  name = "${var.bastion_name}-scheduler-ecs-policy"
-  role = aws_iam_role.scheduler_role.id
+resource "aws_iam_role_policy" "lambda_ecs_policy" {
+  name = "${var.bastion_name}-lambda-ecs-policy"
+  role = aws_iam_role.lambda_role.id
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -389,41 +396,83 @@ resource "aws_iam_role_policy" "scheduler_ecs_policy" {
       {
         Effect = "Allow"
         Action = [
-          "ecs:UpdateService"
+          "ecs:UpdateService",
+          "ecs:DescribeServices"
         ]
         Resource = [
-          aws_ecs_service.bastion_service.id
+          aws_ecs_service.bastion_service.id,
+          "${aws_ecs_service.bastion_service.id}/*"
         ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ]
+        Resource = "*"
       }
     ]
   })
 }
 
-resource "aws_scheduler_schedule" "auto_stop" {
-  name       = "${var.bastion_name}-auto-stop"
-  group_name = "default"
+resource "aws_lambda_function" "auto_stop" {
+  filename         = data.archive_file.lambda_zip.output_path
+  function_name    = "${var.bastion_name}-auto-stop"
+  role            = aws_iam_role.lambda_role.arn
+  handler         = "lambda_stop.lambda_handler"
+  runtime         = "python3.11"
 
-  flexible_time_window {
-    mode = "OFF"
+  environment {
+    variables = {
+      CLUSTER_NAME = aws_ecs_cluster.bastion_cluster.name
+      SERVICE_NAME = aws_ecs_service.bastion_service.name
+    }
   }
 
-  # Harmonogram cyklicznego zadania cron (np. codziennie o 23:00 UTC)
-  schedule_expression          = var.auto_stop_cron
-  schedule_expression_timezone = "UTC"
-
-  target {
-    arn      = "arn:aws:scheduler:::aws-sdk:ecs:updateService"
-    role_arn = aws_iam_role.scheduler_role.arn
-
-    input = jsonencode({
-      Cluster      = aws_ecs_cluster.bastion_cluster.name
-      Service      = aws_ecs_service.bastion_service.name
-      DesiredCount = 0
-    })
+  tags = {
+    Environment = "ephemeral"
+    ManagedBy   = "terraform"
   }
+}
+
+resource "aws_cloudwatch_log_group" "lambda_logs" {
+  name              = "/aws/lambda/${var.bastion_name}-auto-stop"
+  retention_in_days = 1
+
+  tags = {
+    Environment = "ephemeral"
+    ManagedBy   = "terraform"
+  }
+}
+
+resource "aws_lambda_permission" "allow_eventbridge" {
+  statement_id  = "AllowExecutionFromEventBridge"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.auto_stop.function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.auto_stop.arn
+}
+
+resource "aws_cloudwatch_event_rule" "auto_stop" {
+  name                = "${var.bastion_name}-auto-stop"
+  description         = "Automatyczne zatrzymanie bastionu"
+  schedule_expression = var.auto_stop_cron
+
+  tags = {
+    Environment = "ephemeral"
+    ManagedBy   = "terraform"
+  }
+}
+
+resource "aws_cloudwatch_event_target" "auto_stop" {
+  rule           = aws_cloudwatch_event_rule.auto_stop.name
+  target_id      = "${var.bastion_name}-auto-stop-target"
+  arn            = aws_lambda_function.auto_stop.arn
 
   retry_policy {
     maximum_retry_attempts = 3
-    retry_after_seconds    = 60
+    maximum_event_age_in_seconds = 3600
   }
 }

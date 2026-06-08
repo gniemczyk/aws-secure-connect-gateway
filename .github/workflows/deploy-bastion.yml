@@ -112,9 +112,15 @@ jobs:
           terraform import $TF_VARS \
             aws_cloudwatch_log_group.ecs_exec_logs "/ecs/${{ env.BASTION_NAME }}-exec" 2>/dev/null || true
           terraform import $TF_VARS \
-            aws_iam_role.scheduler_role "${{ env.BASTION_NAME }}-scheduler-role" 2>/dev/null || true
+            aws_iam_role.lambda_role "${{ env.BASTION_NAME }}-lambda-role" 2>/dev/null || true
           terraform import $TF_VARS \
-            aws_scheduler_schedule.auto_stop "${{ env.BASTION_NAME }}-auto-stop" 2>/dev/null || true
+            aws_lambda_function.auto_stop "${{ env.BASTION_NAME }}-auto-stop" 2>/dev/null || true
+          terraform import $TF_VARS \
+            aws_cloudwatch_log_group.lambda_logs "/aws/lambda/${{ env.BASTION_NAME }}-auto-stop" 2>/dev/null || true
+          terraform import $TF_VARS \
+            aws_cloudwatch_event_rule.auto_stop "${{ env.BASTION_NAME }}-auto-stop" 2>/dev/null || true
+          terraform import $TF_VARS \
+            aws_cloudwatch_event_target.auto_stop "${{ env.BASTION_NAME }}-auto-stop/${{ env.BASTION_NAME }}-auto-stop-target" 2>/dev/null || true
 
       - name: Wdrozenie infrastruktury
         if: github.event.inputs.action == 'START'
@@ -250,9 +256,15 @@ jobs:
           terraform import $TF_VARS \
             aws_cloudwatch_log_group.ecs_exec_logs "/ecs/${{ env.BASTION_NAME }}-exec" 2>/dev/null || true
           terraform import $TF_VARS \
-            aws_iam_role.scheduler_role "${{ env.BASTION_NAME }}-scheduler-role" 2>/dev/null || true
+            aws_iam_role.lambda_role "${{ env.BASTION_NAME }}-lambda-role" 2>/dev/null || true
           terraform import $TF_VARS \
-            aws_scheduler_schedule.auto_stop "${{ env.BASTION_NAME }}-auto-stop" 2>/dev/null || true
+            aws_lambda_function.auto_stop "${{ env.BASTION_NAME }}-auto-stop" 2>/dev/null || true
+          terraform import $TF_VARS \
+            aws_cloudwatch_log_group.lambda_logs "/aws/lambda/${{ env.BASTION_NAME }}-auto-stop" 2>/dev/null || true
+          terraform import $TF_VARS \
+            aws_cloudwatch_event_rule.auto_stop "${{ env.BASTION_NAME }}-auto-stop" 2>/dev/null || true
+          terraform import $TF_VARS \
+            aws_cloudwatch_event_target.auto_stop "${{ env.BASTION_NAME }}-auto-stop/${{ env.BASTION_NAME }}-auto-stop-target" 2>/dev/null || true
 
           terraform destroy -auto-approve \
             -var="vpc_id=${{ vars.VPC_ID }}" \
