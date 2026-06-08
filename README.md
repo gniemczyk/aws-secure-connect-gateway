@@ -166,6 +166,11 @@ Aby to zrobić, uruchom lokalnie skrypt:
 ```bash
 ./connect.sh
 ```
+Skrypt zapyta o:
+- Wybór profilu AWS (jeśli masz wiele)
+- Wybór regionu (lub użyj z konfiguracji)
+- Opcję połączenia (shell lub port forwarding)
+
 Wybierz opcję `2) Port Forwarding` i podaj dane hosta docelowego w VPC (np. endpoint bazy danych) oraz porty. Skrypt automatycznie zestawi bezpieczny tunel.
 
 ## Struktura projektu
@@ -191,14 +196,18 @@ Wybierz opcję `2) Port Forwarding` i podaj dane hosta docelowego w VPC (np. end
 | Zasób | Cel |
 |-------|-----|
 | ECS Cluster | Hosting kontenerów |
-| ECS Service (desired=1) | Utrzymuje dokładnie 1 task |
-| ECS Task Definition | Definicja kontenera |
+| ECS Service (desired=1) | Utrzymuje dokładnie 1 task z healthcheck |
+| ECS Task Definition | Definicja kontenera z healthcheck |
 | IAM Execution Role | Pulling images, logi |
 | IAM Task Role + SSM Policy | ECS Exec (session manager) |
+| Lambda Function | Auto-stop przez EventBridge (retry policy) |
+| EventBridge Rule | Harmonogram cron (np. 23:00 UTC) |
+| IAM Lambda Role | Uprawnienia Lambda do ECS UpdateService |
 | Subnet | Tymczasowa podsieć w VPC |
 | Route Table + IGW route | Dostęp do internetu (ECR pull) |
 | Security Group | Outbound only (brak inbound) |
 | CloudWatch Log Group | Logi kontenera (1 dzień retencji) |
+| CloudWatch Log Group | Logi Lambda (1 dzień retencji) |
 
 ## Troubleshooting
 
