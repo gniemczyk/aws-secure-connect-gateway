@@ -12,6 +12,8 @@ jobs:
     steps:
       - name: Pobranie repozytorium
         uses: actions/checkout@v4
+        with:
+          persist-credentials: true
 
       - name: Instalacja Terraform
         uses: hashicorp/setup-terraform@v3
@@ -20,7 +22,15 @@ jobs:
 
       - name: Formatowanie Terraform
         working-directory: ./terraform
-        run: terraform fmt -check
+        run: terraform fmt -recursive
+
+      - name: Commit sformatowanych plikow
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add .
+          git diff --staged --quiet || git commit -m "style: auto-format terraform files"
+          git push
 
       - name: Inicjalizacja do walidacji
         working-directory: ./terraform
