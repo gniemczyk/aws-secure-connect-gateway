@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# Bastion container - keeps running for ECS Exec access
+# Kontener bastionu - dziala nieprzerwanie dla dostepu przez ECS Exec
 echo "=========================================="
 echo " Ephemeral Bastion READY"
 echo " Polacz sie przez: aws ecs execute-command"

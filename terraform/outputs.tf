@@ -13,3 +13,7 @@ output "service_name" {
 output "log_group_name" {
   value = aws_cloudwatch_log_group.bastion_logs.name
 }
+
+output "ecs_exec_log_group_name" {
+  value = aws_cloudwatch_log_group.ecs_exec_logs.name
+}

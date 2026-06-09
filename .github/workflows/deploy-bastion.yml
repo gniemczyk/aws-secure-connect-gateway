@@ -10,6 +10,11 @@ on:
         options:
           - START
           - STOP
+      auto_stop_cron:
+        description: 'Wyrażenie cron automatycznego zatrzymania bastionu (UTC, domyślnie 23:00)'
+        required: true
+        default: 'cron(0 23 * * ? *)'
+        type: string
 
 env:
   AWS_REGION: ${{ vars.AWS_REGION || 'eu-central-1' }}
@@ -88,7 +93,7 @@ jobs:
         if: github.event.inputs.action == 'START'
         working-directory: ./terraform
         run: |
-          TF_VARS="-var=vpc_id=${{ vars.VPC_ID }} -var=region=${{ env.AWS_REGION }} -var=container_image=${{ env.IMAGE_URI }}"
+          TF_VARS="-var=vpc_id=${{ vars.VPC_ID }} -var=region=${{ env.AWS_REGION }} -var=container_image=${{ env.IMAGE_URI }} -var=auto_stop_cron=${{ github.event.inputs.auto_stop_cron || 'cron(0 23 * * ? *)' }}"
 
           terraform state rm random_id.serveo_suffix 2>/dev/null || true
 
@@ -104,6 +109,18 @@ jobs:
             aws_ecs_service.bastion_service "${{ env.BASTION_NAME }}-cluster/${{ env.BASTION_NAME }}-service" 2>/dev/null || true
           terraform import $TF_VARS \
             aws_cloudwatch_log_group.bastion_logs "/ecs/${{ env.BASTION_NAME }}" 2>/dev/null || true
+          terraform import $TF_VARS \
+            aws_cloudwatch_log_group.ecs_exec_logs "/ecs/${{ env.BASTION_NAME }}-exec" 2>/dev/null || true
+          terraform import $TF_VARS \
+            aws_iam_role.lambda_role "${{ env.BASTION_NAME }}-lambda-role" 2>/dev/null || true
+          terraform import $TF_VARS \
+            aws_lambda_function.auto_stop "${{ env.BASTION_NAME }}-auto-stop" 2>/dev/null || true
+          terraform import $TF_VARS \
+            aws_cloudwatch_log_group.lambda_logs "/aws/lambda/${{ env.BASTION_NAME }}-auto-stop" 2>/dev/null || true
+          terraform import $TF_VARS \
+            aws_cloudwatch_event_rule.auto_stop "${{ env.BASTION_NAME }}-auto-stop" 2>/dev/null || true
+          terraform import $TF_VARS \
+            aws_cloudwatch_event_target.auto_stop "${{ env.BASTION_NAME }}-auto-stop/${{ env.BASTION_NAME }}-auto-stop-target" 2>/dev/null || true
 
       - name: Wdrozenie infrastruktury
         if: github.event.inputs.action == 'START'
@@ -112,7 +129,8 @@ jobs:
           terraform apply -auto-approve \
             -var="vpc_id=${{ vars.VPC_ID }}" \
             -var="region=${{ env.AWS_REGION }}" \
-            -var="container_image=${{ env.IMAGE_URI }}"
+            -var="container_image=${{ env.IMAGE_URI }}" \
+            -var="auto_stop_cron=${{ github.event.inputs.auto_stop_cron || 'cron(0 23 * * ? *)' }}"
 
       - name: Pobranie danych z Terraform
         if: github.event.inputs.action == 'START'
@@ -221,7 +239,7 @@ jobs:
         if: github.event.inputs.action == 'STOP'
         working-directory: ./terraform
         run: |
-          TF_VARS="-var=vpc_id=${{ vars.VPC_ID }} -var=region=${{ env.AWS_REGION }} -var=container_image=000000000000.dkr.ecr.eu-central-1.amazonaws.com/x:latest"
+          TF_VARS="-var=vpc_id=${{ vars.VPC_ID }} -var=region=${{ env.AWS_REGION }} -var=container_image=000000000000.dkr.ecr.eu-central-1.amazonaws.com/x:latest -var=auto_stop_cron=cron(0 23 * * ? *)"
 
           terraform import $TF_VARS \
             aws_iam_role.ecs_task_execution_role "${{ env.BASTION_NAME }}-exec-role" 2>/dev/null || true
@@ -235,11 +253,24 @@ jobs:
             aws_ecs_service.bastion_service "${{ env.BASTION_NAME }}-cluster/${{ env.BASTION_NAME }}-service" 2>/dev/null || true
           terraform import $TF_VARS \
             aws_cloudwatch_log_group.bastion_logs "/ecs/${{ env.BASTION_NAME }}" 2>/dev/null || true
+          terraform import $TF_VARS \
+            aws_cloudwatch_log_group.ecs_exec_logs "/ecs/${{ env.BASTION_NAME }}-exec" 2>/dev/null || true
+          terraform import $TF_VARS \
+            aws_iam_role.lambda_role "${{ env.BASTION_NAME }}-lambda-role" 2>/dev/null || true
+          terraform import $TF_VARS \
+            aws_lambda_function.auto_stop "${{ env.BASTION_NAME }}-auto-stop" 2>/dev/null || true
+          terraform import $TF_VARS \
+            aws_cloudwatch_log_group.lambda_logs "/aws/lambda/${{ env.BASTION_NAME }}-auto-stop" 2>/dev/null || true
+          terraform import $TF_VARS \
+            aws_cloudwatch_event_rule.auto_stop "${{ env.BASTION_NAME }}-auto-stop" 2>/dev/null || true
+          terraform import $TF_VARS \
+            aws_cloudwatch_event_target.auto_stop "${{ env.BASTION_NAME }}-auto-stop/${{ env.BASTION_NAME }}-auto-stop-target" 2>/dev/null || true
 
           terraform destroy -auto-approve \
             -var="vpc_id=${{ vars.VPC_ID }}" \
             -var="region=${{ env.AWS_REGION }}" \
-            -var="container_image=000000000000.dkr.ecr.eu-central-1.amazonaws.com/x:latest"
+            -var="container_image=000000000000.dkr.ecr.eu-central-1.amazonaws.com/x:latest" \
+            -var="auto_stop_cron=cron(0 23 * * ? *)"
 
       - name: Potwierdzenie zatrzymania
         if: github.event.inputs.action == 'STOP'

@@ -1,0 +1,49 @@
+name: Walidacja i Bezpieczenstwo (CI)
+
+on:
+  workflow_dispatch: # Mozliwosc recznego uruchomienia z GitHub Actions UI
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  lint-terraform:
+    name: Walidacja Terraform
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pobranie repozytorium
+        uses: actions/checkout@v4
+
+      - name: Instalacja Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.5.7'
+
+      - name: Formatowanie Terraform
+        working-directory: ./terraform
+        run: terraform fmt -check
+
+      - name: Inicjalizacja do walidacji
+        working-directory: ./terraform
+        run: terraform init -backend=false
+
+      - name: Walidacja skladni
+        working-directory: ./terraform
+        run: terraform validate
+
+  security-scan:
+    name: Skanowanie Bezpieczenstwa (Trivy)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pobranie repozytorium
+        uses: actions/checkout@v4
+
+      - name: Skanowanie IaC i plików projektu (Trivy)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'config'
+          hide-triggered-by: 'true'
+          exit-code: '1' # Przerwij build przy wykryciu krytycznych problemow w IaC
+          ignore-unfixed: true
+          severity: 'HIGH,CRITICAL'
