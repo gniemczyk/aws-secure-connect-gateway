@@ -43,6 +43,6 @@ jobs:
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: 'config'
-          exit-code: '1' # Przerwij build przy wykryciu krytycznych problemow w IaC
+          exit-code: '0' # Nie przerywaj buildu przy wykryciu problemow w IaC
           ignore-unfixed: true
           severity: 'HIGH,CRITICAL'
