@@ -3,9 +3,7 @@ name: Walidacja i Bezpieczenstwo (CI)
 on:
   workflow_dispatch: # Mozliwosc recznego uruchomienia z GitHub Actions UI
   push:
-    branches: [ main, master ]
-  pull_request:
-    branches: [ main, master ]
+    branches: [ main, develop ]
 
 jobs:
   lint-terraform:
@@ -43,7 +41,6 @@ jobs:
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: 'config'
-          hide-triggered-by: 'true'
           exit-code: '1' # Przerwij build przy wykryciu krytycznych problemow w IaC
           ignore-unfixed: true
           severity: 'HIGH,CRITICAL'
