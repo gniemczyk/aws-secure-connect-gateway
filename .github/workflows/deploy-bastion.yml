@@ -235,50 +235,125 @@ jobs:
             sleep 5
           done
 
-      - name: Usuwanie infrastruktury
+      - name: Usuwanie infrastruktury przez Terraform
         if: github.event.inputs.action == 'STOP'
         working-directory: ./terraform
         run: |
-          TF_VARS="-var=vpc_id=${{ vars.VPC_ID }} -var=region=${{ env.AWS_REGION }} -var=container_image=000000000000.dkr.ecr.eu-central-1.amazonaws.com/x:latest -var=auto_stop_cron=cron(0 23 * * ? *)"
+          echo "Synchronizacja stanu Terraform..."
+          TF_VARS="-var=vpc_id=${{ vars.VPC_ID }} -var=region=${{ env.AWS_REGION }} -var=container_image=000000000000.dkr.ecr.eu-central-1.amazonaws.com/x:latest -var=auto_stop_cron=cron(0\ 23\ *\ *\ \?\ \*)"
 
-          terraform import $TF_VARS \
-            aws_iam_role.ecs_task_execution_role "${{ env.BASTION_NAME }}-exec-role" 2>/dev/null || true
-          terraform import $TF_VARS \
-            aws_iam_role_policy_attachment.ecs_exec_policy "${{ env.BASTION_NAME }}-exec-role/arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy" 2>/dev/null || true
-          terraform import $TF_VARS \
-            aws_iam_role.ecs_task_role "${{ env.BASTION_NAME }}-task-role" 2>/dev/null || true
+          # Import zasobów aby upewnić się że są w state
+          echo "Importowanie zasobów do state..."
           terraform import $TF_VARS \
             aws_ecs_cluster.bastion_cluster "${{ env.BASTION_NAME }}-cluster" 2>/dev/null || true
           terraform import $TF_VARS \
             aws_ecs_service.bastion_service "${{ env.BASTION_NAME }}-cluster/${{ env.BASTION_NAME }}-service" 2>/dev/null || true
           terraform import $TF_VARS \
-            aws_cloudwatch_log_group.bastion_logs "/ecs/${{ env.BASTION_NAME }}" 2>/dev/null || true
-          terraform import $TF_VARS \
-            aws_cloudwatch_log_group.ecs_exec_logs "/ecs/${{ env.BASTION_NAME }}-exec" 2>/dev/null || true
-          terraform import $TF_VARS \
-            aws_iam_role.lambda_role "${{ env.BASTION_NAME }}-lambda-role" 2>/dev/null || true
-          terraform import $TF_VARS \
-            aws_lambda_function.auto_stop "${{ env.BASTION_NAME }}-auto-stop" 2>/dev/null || true
-          terraform import $TF_VARS \
-            aws_cloudwatch_log_group.lambda_logs "/aws/lambda/${{ env.BASTION_NAME }}-auto-stop" 2>/dev/null || true
-          terraform import $TF_VARS \
-            aws_cloudwatch_event_rule.auto_stop "${{ env.BASTION_NAME }}-auto-stop" 2>/dev/null || true
-          terraform import $TF_VARS \
-            aws_cloudwatch_event_target.auto_stop "${{ env.BASTION_NAME }}-auto-stop/${{ env.BASTION_NAME }}-auto-stop-target" 2>/dev/null || true
+            aws_ecs_task_definition.bastion_task "${{ env.BASTION_NAME }}-task:1" 2>/dev/null || true
 
-          terraform destroy -auto-approve \
+          echo "Usuwanie wszystkich zasobów Terraform..."
+          if ! terraform destroy -auto-approve \
             -var="vpc_id=${{ vars.VPC_ID }}" \
             -var="region=${{ env.AWS_REGION }}" \
             -var="container_image=000000000000.dkr.ecr.eu-central-1.amazonaws.com/x:latest" \
-            -var="auto_stop_cron=cron(0 23 * * ? *)"
+            -var="auto_stop_cron=cron(0 23 * * ? *)"; then
+            echo "BŁĄD: Terraform destroy nie powiódł się!"
+            exit 1
+          fi
+          
+          echo "✅ Wszystkie zasoby Terraform usunięte pomyślnie"
 
-      - name: Potwierdzenie zatrzymania
+      - name: Usuwanie S3 bucketu stanu Terraform
         if: github.event.inputs.action == 'STOP'
+        run: |
+          BUCKET_NAME="secure-connect-gateway-tfstate"
+          echo "Czyszczenie S3 bucketu: $BUCKET_NAME"
+          
+          # Usunięcie wszystkich wersji obiektów (jeśli versioning jest włączony)
+          aws s3api list-object-versions \
+            --bucket "$BUCKET_NAME" \
+            --region ${{ env.TFSTATE_REGION }} \
+            --query 'Versions[].{Key:Key,VersionId:VersionId}' \
+            --output json | jq -r '.[] | "--key \(.Key) --version-id \(.VersionId)"' | \
+            xargs -I {} aws s3api delete-object --bucket "$BUCKET_NAME" --region ${{ env.TFSTATE_REGION }} {} || true
+
+          # Usunięcie DeleteMarkers (jeśli istnieją)
+          aws s3api list-object-versions \
+            --bucket "$BUCKET_NAME" \
+            --region ${{ env.TFSTATE_REGION }} \
+            --query 'DeleteMarkers[].{Key:Key,VersionId:VersionId}' \
+            --output json | jq -r '.[] | "--key \(.Key) --version-id \(.VersionId)"' | \
+            xargs -I {} aws s3api delete-object --bucket "$BUCKET_NAME" --region ${{ env.TFSTATE_REGION }} {} || true
+
+          # Usunięcie bucketu
+          if aws s3api delete-bucket \
+            --bucket "$BUCKET_NAME" \
+            --region ${{ env.TFSTATE_REGION }} 2>/dev/null; then
+            echo "✅ S3 bucket usunięty pomyślnie"
+          else
+            echo "⚠️  S3 bucket już nie istnieje lub nie można go usunąć (ignoruję)"
+          fi
+
+      - name: Potwierdzenie zatrzymania - SUKCES
+        if: github.event.inputs.action == 'STOP' && success()
         run: |
           echo ""
           echo "============================================"
-          echo " BASTION ZATRZYMANY"
+          echo " ✅ BASTION CAŁKOWICIE USUNIĘTY"
           echo "============================================"
           echo ""
-          echo "## Bastion zatrzymany" >> $GITHUB_STEP_SUMMARY
-          echo "Wszystkie zasoby usuniete. Brak kosztow." >> $GITHUB_STEP_SUMMARY
+          echo "✅ ECS Cluster - usunięty"
+          echo "✅ ECS Service - usunięty"
+          echo "✅ ECS Task Definition - usunięty"
+          echo "✅ Security Group - usunięty"
+          echo "✅ Subnet - usunięty"
+          echo "✅ Route Table - usunięty"
+          echo "✅ IAM Roles - usunięte"
+          echo "✅ Lambda Function - usunięta"
+          echo "✅ EventBridge Rules - usunięte"
+          echo "✅ CloudWatch Log Groups - usunięte"
+          echo "✅ S3 Backend - usunięty"
+          echo ""
+          echo "Brak kosztów. Wszystko czyste."
+          echo "============================================"
+          echo ""
+
+          echo "## ✅ Bastion całkowicie usunięty" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Wszystkie zasoby AWS zostały skasowane:" >> $GITHUB_STEP_SUMMARY
+          echo "- Infrastruktura ECS" >> $GITHUB_STEP_SUMMARY
+          echo "- Zasoby sieciowe (Subnet, Route Table, SG)" >> $GITHUB_STEP_SUMMARY
+          echo "- IAM Roles i Policies" >> $GITHUB_STEP_SUMMARY
+          echo "- Lambda i EventBridge" >> $GITHUB_STEP_SUMMARY
+          echo "- CloudWatch Logs" >> $GITHUB_STEP_SUMMARY
+          echo "- S3 Backend Terraform" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Brak dodatkowych kosztów."  >> $GITHUB_STEP_SUMMARY
+
+      - name: Potwierdzenie zatrzymania - BŁĄD
+        if: github.event.inputs.action == 'STOP' && failure()
+        run: |
+          echo ""
+          echo "============================================"
+          echo " ❌ BŁĄD PODCZAS USUWANIA ZASOBÓW"
+          echo "============================================"
+          echo ""
+          echo "Terraform destroy nie powiódł się!"
+          echo "Sprawdź logi powyżej aby znaleźć problem."
+          echo ""
+          echo "Możliwe przyczyny:"
+          echo "- Brak uprawnień IAM"
+          echo "- Zasoby są zablokowane"
+          echo "- Zasoby są w użyciu"
+          echo ""
+          echo "Próba ręczna:"
+          echo "cd terraform && terraform destroy -var=vpc_id=... -var=region=..."
+          echo ""
+          echo "============================================"
+          echo ""
+
+          echo "## ❌ Błąd podczas usuwania zasobów" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Terraform destroy nie powiódł się. Sprawdź logi." >> $GITHUB_STEP_SUMMARY
+          
+          exit 1

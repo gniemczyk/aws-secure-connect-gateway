@@ -96,6 +96,8 @@ resource "aws_route_table" "bastion_rt" {
 resource "aws_route_table_association" "bastion_rt_assoc" {
   subnet_id      = local.bastion_subnet_id
   route_table_id = aws_route_table.bastion_rt.id
+
+  depends_on = [aws_route_table.bastion_rt]
 }
 
 # --- GRUPA ZABEZPIECZEN ---
@@ -121,6 +123,10 @@ resource "aws_security_group" "bastion_sg" {
     Name        = "${var.bastion_name}-sg"
     Environment = "ephemeral"
     ManagedBy   = "terraform"
+  }
+
+  lifecycle {
+    create_before_destroy = true
   }
 }
 
@@ -170,6 +176,7 @@ resource "aws_ecs_cluster" "bastion_cluster" {
 resource "aws_cloudwatch_log_group" "bastion_logs" {
   name              = "/ecs/${var.bastion_name}"
   retention_in_days = 1
+  skip_destroy      = false
 
   tags = {
     Environment = "ephemeral"
@@ -184,6 +191,7 @@ resource "aws_cloudwatch_log_group" "bastion_logs" {
 resource "aws_cloudwatch_log_group" "ecs_exec_logs" {
   name              = "/ecs/${var.bastion_name}-exec"
   retention_in_days = 1
+  skip_destroy      = false
 
   tags = {
     Environment = "ephemeral"
@@ -423,6 +431,7 @@ resource "aws_lambda_function" "auto_stop" {
   role            = aws_iam_role.lambda_role.arn
   handler         = "lambda_stop.lambda_handler"
   runtime         = "python3.11"
+  source_code_hash = data.archive_file.lambda_zip.output_base64sha256
 
   environment {
     variables = {
@@ -435,11 +444,16 @@ resource "aws_lambda_function" "auto_stop" {
     Environment = "ephemeral"
     ManagedBy   = "terraform"
   }
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 resource "aws_cloudwatch_log_group" "lambda_logs" {
   name              = "/aws/lambda/${var.bastion_name}-auto-stop"
   retention_in_days = 1
+  skip_destroy      = false
 
   tags = {
     Environment = "ephemeral"
