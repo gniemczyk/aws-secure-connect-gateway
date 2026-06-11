@@ -265,52 +265,33 @@ jobs:
 
       - name: Usuwanie S3 bucketu stanu Terraform
         if: github.event.inputs.action == 'STOP' && success()
-        continue-on-error: true
         run: |
           BUCKET_NAME="secure-connect-gateway-tfstate"
-          echo "Czyszczenie S3 bucketu: $BUCKET_NAME"
+          echo "Czyszczenie i usuwanie S3 bucketu: $BUCKET_NAME"
           
           # Sprawdzenie czy bucket istnieje
           if ! aws s3api head-bucket --bucket "$BUCKET_NAME" --region ${{ env.TFSTATE_REGION }} 2>/dev/null; then
-            echo "ℹ️  S3 bucket nie istnieje - pomijam"
+            echo "ℹ️  S3 bucket nie istnieje - nic do zrobienia"
             exit 0
           fi
           
-          echo "Usuwanie obiektów z bucketu..."
+          echo "Usuwanie wszystkich obiektów z bucketu..."
           
-          # Usunięcie wszystkich wersji obiektów (jeśli versioning jest włączony)
-          VERSIONS=$(aws s3api list-object-versions \
-            --bucket "$BUCKET_NAME" \
-            --region ${{ env.TFSTATE_REGION }} \
-            --query 'Versions[].{Key:Key,VersionId:VersionId}' \
-            --output json)
+          # Usunięcie całego bucketu z zawartością
+          aws s3 rm "s3://$BUCKET_NAME" --recursive --region ${{ env.TFSTATE_REGION }} || true
           
-          if [ "$VERSIONS" != "null" ] && [ -n "$VERSIONS" ] && [ "$VERSIONS" != "[]" ]; then
-            echo "$VERSIONS" | jq -r '.[] | "--key \(.Key) --version-id \(.VersionId)"' | \
-            xargs -I {} aws s3api delete-object --bucket "$BUCKET_NAME" --region ${{ env.TFSTATE_REGION }} {}
-          fi
-
-          # Usunięcie DeleteMarkers (jeśli istnieją)
-          DELETE_MARKERS=$(aws s3api list-object-versions \
-            --bucket "$BUCKET_NAME" \
-            --region ${{ env.TFSTATE_REGION }} \
-            --query 'DeleteMarkers[].{Key:Key,VersionId:VersionId}' \
-            --output json)
+          echo "Czekanie na propagację..."
+          sleep 2
           
-          if [ "$DELETE_MARKERS" != "null" ] && [ -n "$DELETE_MARKERS" ] && [ "$DELETE_MARKERS" != "[]" ]; then
-            echo "$DELETE_MARKERS" | jq -r '.[] | "--key \(.Key) --version-id \(.VersionId)"' | \
-            xargs -I {} aws s3api delete-object --bucket "$BUCKET_NAME" --region ${{ env.TFSTATE_REGION }} {}
-          fi
-
-          # Usunięcie bucketu
           echo "Usuwanie bucketu..."
-          if aws s3api delete-bucket \
+          if ! aws s3api delete-bucket \
             --bucket "$BUCKET_NAME" \
             --region ${{ env.TFSTATE_REGION }}; then
-            echo "✅ S3 bucket usunięty pomyślnie"
-          else
-            echo "⚠️  Nie można usunąć S3 bucketu (ale Terraform się powiedzie)"
+            echo "❌ BŁĄD: Nie można usunąć S3 bucketu!"
+            exit 1
           fi
+          
+          echo "✅ S3 bucket usunięty pomyślnie"
 
       - name: Potwierdzenie zatrzymania - SUKCES
         if: github.event.inputs.action == 'STOP' && success()
