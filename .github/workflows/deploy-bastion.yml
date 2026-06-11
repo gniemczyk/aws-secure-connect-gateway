@@ -275,10 +275,39 @@ jobs:
             exit 0
           fi
           
-          echo "Usuwanie wszystkich obiektów z bucketu..."
+          echo "Usuwanie wszystkich wersji obiektów..."
           
-          # Usunięcie całego bucketu z zawartością
-          aws s3 rm "s3://$BUCKET_NAME" --recursive --region ${{ env.TFSTATE_REGION }} || true
+          # Usuń wszystkie wersje (dla bucketów z versioningiem)
+          aws s3api list-object-versions \
+            --bucket "$BUCKET_NAME" \
+            --region ${{ env.TFSTATE_REGION }} \
+            --query 'Versions[*].[Key,VersionId]' \
+            --output text | while read -r key versionid; do
+              if [ -n "$key" ] && [ -n "$versionid" ]; then
+                aws s3api delete-object \
+                  --bucket "$BUCKET_NAME" \
+                  --key "$key" \
+                  --version-id "$versionid" \
+                  --region ${{ env.TFSTATE_REGION }} 2>/dev/null || true
+              fi
+            done
+          
+          echo "Usuwanie DeleteMarkers..."
+          
+          # Usuń wszystkie DeleteMarkers
+          aws s3api list-object-versions \
+            --bucket "$BUCKET_NAME" \
+            --region ${{ env.TFSTATE_REGION }} \
+            --query 'DeleteMarkers[*].[Key,VersionId]' \
+            --output text | while read -r key versionid; do
+              if [ -n "$key" ] && [ -n "$versionid" ]; then
+                aws s3api delete-object \
+                  --bucket "$BUCKET_NAME" \
+                  --key "$key" \
+                  --version-id "$versionid" \
+                  --region ${{ env.TFSTATE_REGION }} 2>/dev/null || true
+              fi
+            done
           
           echo "Czekanie na propagację..."
           sleep 2
