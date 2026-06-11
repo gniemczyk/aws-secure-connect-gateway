@@ -239,25 +239,13 @@ jobs:
         if: github.event.inputs.action == 'STOP'
         working-directory: ./terraform
         run: |
-          echo "Synchronizacja stanu Terraform..."
-          TF_VARS="-var=vpc_id=${{ vars.VPC_ID }} -var=region=${{ env.AWS_REGION }} -var=container_image=000000000000.dkr.ecr.eu-central-1.amazonaws.com/x:latest -var=auto_stop_cron=cron(0\ 23\ *\ *\ \?\ \*)"
-
-          # Import zasobów aby upewnić się że są w state
-          echo "Importowanie zasobów do state..."
-          terraform import $TF_VARS \
-            aws_ecs_cluster.bastion_cluster "${{ env.BASTION_NAME }}-cluster" 2>/dev/null || true
-          terraform import $TF_VARS \
-            aws_ecs_service.bastion_service "${{ env.BASTION_NAME }}-cluster/${{ env.BASTION_NAME }}-service" 2>/dev/null || true
-          terraform import $TF_VARS \
-            aws_ecs_task_definition.bastion_task "${{ env.BASTION_NAME }}-task:1" 2>/dev/null || true
-
           echo "Usuwanie wszystkich zasobów Terraform..."
           if ! terraform destroy -auto-approve \
             -var="vpc_id=${{ vars.VPC_ID }}" \
             -var="region=${{ env.AWS_REGION }}" \
             -var="container_image=000000000000.dkr.ecr.eu-central-1.amazonaws.com/x:latest" \
             -var="auto_stop_cron=cron(0 23 * * ? *)"; then
-            echo "BŁĄD: Terraform destroy nie powiódł się!"
+            echo "❌ BŁĄD: Terraform destroy nie powiódł się!"
             exit 1
           fi
           
