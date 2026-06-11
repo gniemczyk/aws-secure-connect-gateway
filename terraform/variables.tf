@@ -1,3 +1,9 @@
+variable "ecr_repository" {
+  description = "Nazwa ECR repository dla obrazu bastionu"
+  type        = string
+  default     = "secure-connect-gateway"
+}
+
 variable "vpc_id" {
   description = "ID istniejacego VPC"
   type        = string

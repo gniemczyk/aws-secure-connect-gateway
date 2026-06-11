@@ -4,6 +4,26 @@ provider "aws" {
   region = var.region
 }
 
+# --- ECR ---
+
+resource "aws_ecr_repository" "bastion" {
+  name                 = var.ecr_repository
+  image_tag_mutability = "MUTABLE"
+
+  image_scanning_configuration {
+    scan_on_push = false
+  }
+
+  tags = {
+    Environment = "ephemeral"
+    ManagedBy   = "terraform"
+  }
+
+  lifecycle {
+    prevent_destroy = false
+  }
+}
+
 # --- SIEC ---
 
 data "aws_vpc" "selected" {
