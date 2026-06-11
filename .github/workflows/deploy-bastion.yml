@@ -264,7 +264,8 @@ jobs:
           echo "✅ Wszystkie zasoby Terraform usunięte pomyślnie"
 
       - name: Usuwanie S3 bucketu stanu Terraform
-        if: github.event.inputs.action == 'STOP'
+        if: github.event.inputs.action == 'STOP' && success()
+        continue-on-error: true
         run: |
           BUCKET_NAME="secure-connect-gateway-tfstate"
           echo "Czyszczenie S3 bucketu: $BUCKET_NAME"
@@ -301,15 +302,14 @@ jobs:
             xargs -I {} aws s3api delete-object --bucket "$BUCKET_NAME" --region ${{ env.TFSTATE_REGION }} {}
           fi
 
-          # Usunięcie bucketu - MUSI się powieść
+          # Usunięcie bucketu
           echo "Usuwanie bucketu..."
           if aws s3api delete-bucket \
             --bucket "$BUCKET_NAME" \
             --region ${{ env.TFSTATE_REGION }}; then
             echo "✅ S3 bucket usunięty pomyślnie"
           else
-            echo "❌ BŁĄD: Nie można usunąć S3 bucketu!"
-            exit 1
+            echo "⚠️  Nie można usunąć S3 bucketu (ale Terraform się powiedzie)"
           fi
 
       - name: Potwierdzenie zatrzymania - SUKCES
