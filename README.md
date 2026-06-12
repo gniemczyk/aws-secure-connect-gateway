@@ -6,9 +6,10 @@ Efemeryczny bastion oparty na AWS ECS Fargate z dostępem przez ECS Exec (AWS Sy
 
 1. GitHub Workflow uruchamia kontener w ECS Fargate (wewnątrz Twojego VPC). Przy uruchomieniu można zdefiniować wyrażenie cron dla czasu wyłączenia.
 2. Automatycznie tworzona jest reguła **AWS EventBridge Scheduler**, która wyłączy bastion o wybranej godzinie (domyślnie codziennie o 23:00 UTC), chroniąc przed generowaniem kosztów przez noc.
-3. Łączysz się za pomocą lokalnego skryptu `./connect.sh` (oferuje menu z opcjami interaktywnej sesji shell lub tunelu port forwarding bezpośrednio na Twój komputer).
-4. Wszystkie polecenia wpisywane w sesjach są audytowane i zapisywane w **AWS CloudWatch Logs**.
-5. Ręczne wywołanie workflow **STOP** (lub automatyczny harmonogram) zatrzymuje/usuwa tymczasowe zasoby.
+3. **CloudWatch Alarm** monitoruje błędy Lambda i alert w razie niepowodzenia auto-stopu.
+4. Łączysz się za pomocą lokalnego skryptu `./connect.sh` (oferuje menu z opcjami interaktywnej sesji shell lub tunelu port forwarding bezpośrednio na Twój komputer).
+5. Wszystkie polecenia wpisywane w sesjach są audytowane i zapisywane w **AWS CloudWatch Logs** (strukturalne logowanie z Python logger).
+6. Ręczne wywołanie workflow **STOP** (lub automatyczny harmonogram) zatrzymuje/usuwa tymczasowe zasoby.
 
 ```
 Twój komputer
@@ -229,8 +230,19 @@ Wybierz opcję `2) Port Forwarding` i podaj dane hosta docelowego w VPC (np. end
 | Security Group | Outbound only (brak inbound) |
 | CloudWatch Log Group | Logi kontenera (1 dzień retencji) |
 | CloudWatch Log Group | Logi Lambda (1 dzień retencji) |
+| CloudWatch Metric Alarm | Monitoring błędów Lambda auto-stop |
 
 ## Troubleshooting
+
+### Lambda auto-stop zwraca błąd
+
+Sprawdź logi Lambda w CloudWatch:
+
+```bash
+aws logs tail "/aws/lambda/ephemeral-bastion-auto-stop" --region eu-north-1 --follow
+```
+
+Jeśli CloudWatch Alarm `ephemeral-bastion-auto-stop-errors` jest w stanie **ALARM**, oznacza to że Lambda miała błąd przy próbie zatrzymania bastionu (zwykle: błąd parametrów AWS API, brak uprawnień IAM).
 
 ### "TargetNotConnectedException" przy execute-command
 
