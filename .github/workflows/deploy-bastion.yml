@@ -47,22 +47,6 @@ jobs:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
 
-      - name: Logowanie do ECR
-        if: github.event.inputs.action == 'START'
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
-        with:
-          registries: ${{ secrets.AWS_ACCOUNT_ID }}
-
-      - name: Budowanie i push obrazu Docker
-        if: github.event.inputs.action == 'START'
-        run: |
-          REGISTRY=${{ steps.login-ecr.outputs.registry }}
-          IMAGE=$REGISTRY/${{ env.ECR_REPOSITORY }}:latest
-          docker build -t $IMAGE .
-          docker push $IMAGE
-          echo "IMAGE_URI=$IMAGE" >> $GITHUB_ENV
-
       - name: Tworzenie bucketa S3 dla stanu Terraform
         if: github.event.inputs.action == 'START'
         run: |
@@ -79,6 +63,47 @@ jobs:
             -backend-config="key=terraform.tfstate" \
             -backend-config="region=${{ env.TFSTATE_REGION }}" \
             -backend-config="encrypt=true"
+
+      # Krok 1: Import lub utworzenie ECR Repository (potrzebne przed buildem)
+      - name: Przygotowanie ECR Repository
+        if: github.event.inputs.action == 'START'
+        working-directory: ./terraform
+        run: |
+          # Najpierw spróbuj zaimportować istniejący ECR
+          terraform import \
+            -var="vpc_id=${{ vars.VPC_ID }}" \
+            -var="region=${{ env.AWS_REGION }}" \
+            -var="container_image=placeholder" \
+            -var="auto_stop_cron=cron(0 23 * * ? *)" \
+            aws_ecr_repository.bastion "${{ env.ECR_REPOSITORY }}" 2>/dev/null || true
+          
+          # Następnie apply (utworzy jeśli nie istnieje, lub odświeży jeśli istnieje)
+          terraform apply -auto-approve \
+            -target=aws_ecr_repository.bastion \
+            -var="vpc_id=${{ vars.VPC_ID }}" \
+            -var="region=${{ env.AWS_REGION }}" \
+            -var="container_image=placeholder" \
+            -var="auto_stop_cron=cron(0 23 * * ? *)"
+
+      - name: Pobranie URL repozytorium ECR
+        if: github.event.inputs.action == 'START'
+        working-directory: ./terraform
+        id: ecr
+        run: |
+          ECR_URL=$(terraform output -raw ecr_repository_url)
+          echo "ecr_url=$ECR_URL" >> $GITHUB_OUTPUT
+          echo "IMAGE_URI=${ECR_URL}:latest" >> $GITHUB_ENV
+
+      - name: Logowanie do ECR
+        if: github.event.inputs.action == 'START'
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Budowanie i push obrazu Docker
+        if: github.event.inputs.action == 'START'
+        run: |
+          docker build -t ${{ env.IMAGE_URI }} .
+          docker push ${{ env.IMAGE_URI }}
 
       # ===== START =====
       - name: Import istniejacych zasobow
