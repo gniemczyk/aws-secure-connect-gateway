@@ -17,3 +17,7 @@ output "log_group_name" {
 output "ecs_exec_log_group_name" {
   value = aws_cloudwatch_log_group.ecs_exec_logs.name
 }
+
+output "ecr_repository_url" {
+  value = aws_ecr_repository.bastion.repository_url
+}

@@ -4,6 +4,50 @@ provider "aws" {
   region = var.region
 }
 
+# --- ECR ---
+
+resource "aws_ecr_repository" "bastion" {
+  name                 = var.ecr_repository
+  image_tag_mutability = "MUTABLE"
+
+  image_scanning_configuration {
+    scan_on_push = false
+  }
+
+  # Pozwala usunąć repozytorium nawet z obrazami przy terraform destroy
+  force_delete = true
+
+  tags = {
+    Environment = "ephemeral"
+    ManagedBy   = "terraform"
+  }
+
+  lifecycle {
+    prevent_destroy = false
+  }
+}
+
+resource "aws_ecr_lifecycle_policy" "bastion" {
+  repository = aws_ecr_repository.bastion.name
+
+  policy = jsonencode({
+    rules = [
+      {
+        rulePriority = 1
+        description  = "Zachowaj tylko 2 najnowsze obrazy"
+        selection = {
+          tagStatus     = "any"
+          countType     = "imageCountMoreThan"
+          countNumber   = 2
+        }
+        action = {
+          type = "expire"
+        }
+      }
+    ]
+  })
+}
+
 # --- SIEC ---
 
 data "aws_vpc" "selected" {
@@ -17,22 +61,8 @@ data "aws_internet_gateway" "selected" {
   }
 }
 
-# Znajdz istniejaca podsiec bastionu
-data "aws_subnets" "existing_bastion" {
-  filter {
-    name   = "vpc-id"
-    values = [var.vpc_id]
-  }
-  filter {
-    name   = "tag:Name"
-    values = ["${var.bastion_name}-subnet"]
-  }
-}
-
-data "aws_subnet" "existing_bastion" {
-  count = length(data.aws_subnets.existing_bastion.ids) > 0 ? 1 : 0
-  id    = data.aws_subnets.existing_bastion.ids[0]
-}
+# Subnet zawsze tworzymy nowy - nie importujemy istniejących
+# To gwarantuje że Terraform będzie potrafić go usunąć
 
 data "aws_subnets" "existing" {
   filter {
@@ -59,7 +89,6 @@ locals {
 }
 
 resource "aws_subnet" "bastion_subnet" {
-  count                   = length(data.aws_subnets.existing_bastion.ids) > 0 ? 0 : 1
   vpc_id                  = var.vpc_id
   cidr_block              = local.new_subnet_cidr
   availability_zone       = data.aws_availability_zones.available.names[0]
@@ -73,7 +102,7 @@ resource "aws_subnet" "bastion_subnet" {
 }
 
 locals {
-  bastion_subnet_id = length(data.aws_subnets.existing_bastion.ids) > 0 ? data.aws_subnets.existing_bastion.ids[0] : aws_subnet.bastion_subnet[0].id
+  bastion_subnet_id = aws_subnet.bastion_subnet.id
 }
 
 # --- TABELA TRAS ---
@@ -96,23 +125,15 @@ resource "aws_route_table" "bastion_rt" {
 resource "aws_route_table_association" "bastion_rt_assoc" {
   subnet_id      = local.bastion_subnet_id
   route_table_id = aws_route_table.bastion_rt.id
+
+  depends_on = [aws_route_table.bastion_rt]
 }
 
 # --- GRUPA ZABEZPIECZEN ---
 
-data "aws_security_groups" "existing_bastion_sg" {
-  filter {
-    name   = "vpc-id"
-    values = [var.vpc_id]
-  }
-  filter {
-    name   = "tag:Name"
-    values = ["${var.bastion_name}-sg"]
-  }
-}
+# Security Group zawsze tworzymy nowy - nie importujemy istniejących
 
 resource "aws_security_group" "bastion_sg" {
-  count       = length(data.aws_security_groups.existing_bastion_sg.ids) > 0 ? 0 : 1
   name        = "${var.bastion_name}-sg"
   description = "Security Group for ephemeral bastion - outbound only"
   vpc_id      = var.vpc_id
@@ -122,22 +143,24 @@ resource "aws_security_group" "bastion_sg" {
     Environment = "ephemeral"
     ManagedBy   = "terraform"
   }
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 locals {
-  bastion_sg_id = length(data.aws_security_groups.existing_bastion_sg.ids) > 0 ? data.aws_security_groups.existing_bastion_sg.ids[0] : aws_security_group.bastion_sg[0].id
+  bastion_sg_id = aws_security_group.bastion_sg.id
 }
 
-# Regula wyjsciowa (egress) - WSZYSTKIE protokoly/porty (niezaleznie czy SG jest nowy czy istniejacy)
+# Regula wyjsciowa (egress) - WSZYSTKIE protokoly/porty
 resource "aws_security_group_rule" "bastion_egress_all" {
   type              = "egress"
   from_port         = 0
   to_port           = 0
   protocol          = "-1"
   cidr_blocks       = ["0.0.0.0/0"]
-  security_group_id = local.bastion_sg_id
-
-  depends_on = [aws_security_group.bastion_sg]
+  security_group_id = aws_security_group.bastion_sg.id
 }
 
 # --- ECS ---
@@ -170,6 +193,7 @@ resource "aws_ecs_cluster" "bastion_cluster" {
 resource "aws_cloudwatch_log_group" "bastion_logs" {
   name              = "/ecs/${var.bastion_name}"
   retention_in_days = 1
+  skip_destroy      = false
 
   tags = {
     Environment = "ephemeral"
@@ -184,6 +208,7 @@ resource "aws_cloudwatch_log_group" "bastion_logs" {
 resource "aws_cloudwatch_log_group" "ecs_exec_logs" {
   name              = "/ecs/${var.bastion_name}-exec"
   retention_in_days = 1
+  skip_destroy      = false
 
   tags = {
     Environment = "ephemeral"
@@ -423,6 +448,7 @@ resource "aws_lambda_function" "auto_stop" {
   role            = aws_iam_role.lambda_role.arn
   handler         = "lambda_stop.lambda_handler"
   runtime         = "python3.11"
+  source_code_hash = data.archive_file.lambda_zip.output_base64sha256
 
   environment {
     variables = {
@@ -435,11 +461,16 @@ resource "aws_lambda_function" "auto_stop" {
     Environment = "ephemeral"
     ManagedBy   = "terraform"
   }
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 resource "aws_cloudwatch_log_group" "lambda_logs" {
   name              = "/aws/lambda/${var.bastion_name}-auto-stop"
   retention_in_days = 1
+  skip_destroy      = false
 
   tags = {
     Environment = "ephemeral"

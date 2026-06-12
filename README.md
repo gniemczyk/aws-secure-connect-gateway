@@ -105,9 +105,12 @@ aws ecs execute-command --cluster ephemeral-bastion-cluster --task TASK_ID --int
 
 ### Przykłady użycia wewnątrz bastionu
 
-Po połączeniu masz shell Alpine Linux z narzędziami:
+Po połączeniu masz minimalny shell Alpine Linux. Instalujesz tylko potrzebne narzędzia:
 
 ```bash
+# Instalacja narzędzi sieciowych
+apk add curl bind-tools nmap-ncat
+
 # Sprawdzenie połączenia do RDS
 ncat -zv mydb.abc123.eu-north-1.rds.amazonaws.com 5432
 
@@ -116,28 +119,29 @@ curl http://internal-service.local:8080/health
 
 # DNS lookup
 dig internal-service.local
-
-# Sprawdzenie dostępności hosta
-ncat -zv 10.0.1.50 3306
 ```
 
 ### Tunelowanie połączeń
 
 #### 1. Bezpośredni dostęp z poziomu bastionu
 
-W otwartej sesji bastionu możesz bezpośrednio łączyć się do zasobów VPC używając preinstalowanych klientów:
+W otwartej sesji bastionu możesz łączyć się do zasobów VPC po instalacji odpowiednich klientów:
 
 ```bash
 # PostgreSQL
+apk add postgresql-client
 psql -h mydb.abc123.eu-north-1.rds.amazonaws.com -U admin -d mydb
 
 # MySQL
+apk add mysql-client
 mysql -h mydb.abc123.eu-north-1.rds.amazonaws.com -u admin -p mydb
 
 # Redis/ElastiCache
+apk add redis
 redis-cli -h cache.abc123.ng.0001.eun1.cache.amazonaws.com -p 6379
 
 # Sprawdzenie łączności do API wewnętrznego
+apk add curl
 curl http://internal-service.local:8080/health
 ```
 
@@ -146,17 +150,32 @@ curl http://internal-service.local:8080/health
 Jeśli chcesz dostęp z innych procesów w bastionie, użyj `socat` do forwarda portów:
 
 ```bash
+# Instalacja socat
+apk add socat
+
 # Forward port RDS na localhost:5432 wewnątrz bastionu
 socat TCP-LISTEN:5432,reuseaddr,fork TCP:mydb.abc123.eu-north-1.rds.amazonaws.com:5432 &
 
 # Teraz sprawdź dostęp z innego shella w tym bastionie
+apk add nmap-ncat
 ncat -zv 127.0.0.1 5432
 
 # Łączenie się przez localhost
+apk add postgresql-client
 psql -h 127.0.0.1 -U admin -d mydb
 ```
 
-**Dostępne narzędzia w bastionie:** `socat`, `ncat`, `curl`, `dig`, `psql`, `mysql`, `redis-cli`, `aws-cli`, `openssl`, `vim`, `nano`, `net-tools`, `iproute2`, `tcpdump`
+**Narzędzia do instalacji na żądanie:**
+```bash
+apk add curl jq aws-cli           # HTTP/API tools
+apk add postgresql-client         # psql
+apk add mysql-client              # mysql
+apk add redis                     # redis-cli
+apk add nmap-ncat socat tcpdump   # network tools
+apk add bind-tools                # dig, nslookup
+apk add openssh-client            # ssh, scp
+apk add vim nano                  # edytory
+```
 
 #### 3. Lokalne tunelowanie bezpośrednio na Twój komputer (SSM Port Forwarding)
 
@@ -185,7 +204,7 @@ Wybierz opcję `2) Port Forwarding` i podaj dane hosta docelowego w VPC (np. end
 │   ├── main.tf               # ECS, IAM, networking, EventBridge Scheduler
 │   ├── variables.tf          # Zmienne
 │   └── outputs.tf            # Outputy
-├── Dockerfile                # Alpine + dodatkowe narzędzia (aws-cli, vim, tcpdump, etc.)
+├── Dockerfile                # Minimal Alpine (~5-7 MB) - pakiety instalowane na żądanie
 ├── start.sh                  # Keepalive script
 ├── connect.sh                # Lokalny skrypt do wygodnego łączenia i tunelowania portów (SSM)
 └── README.md
@@ -195,6 +214,8 @@ Wybierz opcję `2) Port Forwarding` i podaj dane hosta docelowego w VPC (np. end
 
 | Zasób | Cel |
 |-------|-----|
+| ECR Repository | Przechowywanie obrazów Docker (max 2 obrazy) |
+| ECR Lifecycle Policy | Automatyczne usuwanie starych obrazów |
 | ECS Cluster | Hosting kontenerów |
 | ECS Service (desired=1) | Utrzymuje dokładnie 1 task z healthcheck |
 | ECS Task Definition | Definicja kontenera z healthcheck |
