@@ -24,6 +24,27 @@ resource "aws_ecr_repository" "bastion" {
   }
 }
 
+resource "aws_ecr_lifecycle_policy" "bastion" {
+  repository = aws_ecr_repository.bastion.name
+
+  policy = jsonencode({
+    rules = [
+      {
+        rulePriority = 1
+        description  = "Zachowaj tylko 2 najnowsze obrazy"
+        selection = {
+          tagStatus     = "any"
+          countType     = "imageCountMoreThan"
+          countNumber   = 2
+        }
+        action = {
+          type = "expire"
+        }
+      }
+    ]
+  })
+}
+
 # --- SIEC ---
 
 data "aws_vpc" "selected" {
