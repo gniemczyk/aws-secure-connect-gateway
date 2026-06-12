@@ -258,20 +258,24 @@ jobs:
           echo "Usuwanie wszystkich obrazow z ECR..."
           REPO="${{ env.ECR_REPOSITORY }}"
           
-          # Pobierz liste obrazow
-          IMAGES=$(aws ecr list-images --repository-name "$REPO" --region ${{ env.AWS_REGION }} \
-            --query 'imageIds[*]' --output json 2>/dev/null || echo '[]')
-          
-          if [ "$IMAGES" != "[]" ]; then
-            echo "Znaleziono obrazy do usuniecia..."
-            echo "$IMAGES" | aws ecr batch-delete-image \
-              --repository-name "$REPO" \
-              --region ${{ env.AWS_REGION }} \
-              --cli-input-json file:///dev/stdin || true
-            echo "Obrazy usuniete."
-          else
-            echo "Brak obrazow do usuniecia."
-          fi
+          # Spróbuj obu regionów - AWS_REGION i TFSTATE_REGION
+          for REGION in ${{ env.AWS_REGION }} ${{ env.TFSTATE_REGION }}; do
+            echo "Sprawdzanie regionu: $REGION"
+            IMAGES=$(aws ecr list-images --repository-name "$REPO" --region "$REGION" \
+              --query 'imageIds[*]' --output json 2>/dev/null || echo '[]')
+            
+            if [ "$IMAGES" != "[]" ] && [ "$IMAGES" != "" ]; then
+              echo "Znaleziono obrazy w regionie $REGION:"
+              echo "$IMAGES"
+              echo "$IMAGES" | aws ecr batch-delete-image \
+                --repository-name "$REPO" \
+                --region "$REGION" \
+                --cli-input-json file:///dev/stdin
+              echo "Obrazy usuniete z regionu $REGION."
+            else
+              echo "Brak obrazow w regionie $REGION."
+            fi
+          done
 
       - name: Usuwanie infrastruktury przez Terraform
         if: github.event.inputs.action == 'STOP'
