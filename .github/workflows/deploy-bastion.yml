@@ -264,13 +264,15 @@ jobs:
             IMAGES=$(aws ecr list-images --repository-name "$REPO" --region "$REGION" \
               --query 'imageIds[*]' --output json 2>/dev/null || echo '[]')
             
-            if [ "$IMAGES" != "[]" ] && [ "$IMAGES" != "" ]; then
+            if [ "$IMAGES" != "[]" ] && [ "$IMAGES" != "" ] && [ "$IMAGES" != "null" ]; then
               echo "Znaleziono obrazy w regionie $REGION:"
               echo "$IMAGES"
-              echo "$IMAGES" | aws ecr batch-delete-image \
+              # Kompaktujemy JSON do jednej linii i przekazujemy przez --image-ids
+              IMAGES_COMPACT=$(echo "$IMAGES" | jq -c '.')
+              aws ecr batch-delete-image \
                 --repository-name "$REPO" \
                 --region "$REGION" \
-                --cli-input-json file:///dev/stdin
+                --image-ids "$IMAGES_COMPACT"
               echo "Obrazy usuniete z regionu $REGION."
             else
               echo "Brak obrazow w regionie $REGION."
