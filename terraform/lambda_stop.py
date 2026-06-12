@@ -14,7 +14,7 @@ def lambda_handler(event, context):
         response = ecs.update_service(
             cluster=cluster_name,
             service=service_name,
-            desired_count=0
+            desiredCount=0
         )
         
         print(f"Sukces: Serwis {service_name} zatrzymany")
