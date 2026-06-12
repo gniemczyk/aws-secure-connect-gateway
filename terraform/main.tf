@@ -14,6 +14,9 @@ resource "aws_ecr_repository" "bastion" {
     scan_on_push = false
   }
 
+  # Pozwala usunąć repozytorium nawet z obrazami przy terraform destroy
+  force_delete = true
+
   tags = {
     Environment = "ephemeral"
     ManagedBy   = "terraform"
