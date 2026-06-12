@@ -252,6 +252,27 @@ jobs:
             sleep 5
           done
 
+      - name: Czyszczenie obrazow ECR
+        if: github.event.inputs.action == 'STOP'
+        run: |
+          echo "Usuwanie wszystkich obrazow z ECR..."
+          REPO="${{ env.ECR_REPOSITORY }}"
+          
+          # Pobierz liste obrazow
+          IMAGES=$(aws ecr list-images --repository-name "$REPO" --region ${{ env.AWS_REGION }} \
+            --query 'imageIds[*]' --output json 2>/dev/null || echo '[]')
+          
+          if [ "$IMAGES" != "[]" ]; then
+            echo "Znaleziono obrazy do usuniecia..."
+            echo "$IMAGES" | aws ecr batch-delete-image \
+              --repository-name "$REPO" \
+              --region ${{ env.AWS_REGION }} \
+              --cli-input-json file:///dev/stdin || true
+            echo "Obrazy usuniete."
+          else
+            echo "Brak obrazow do usuniecia."
+          fi
+
       - name: Usuwanie infrastruktury przez Terraform
         if: github.event.inputs.action == 'STOP'
         working-directory: ./terraform
