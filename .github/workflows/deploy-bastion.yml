@@ -47,24 +47,48 @@ jobs:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
 
-      - name: Tworzenie bucketa S3 dla stanu Terraform
+      - name: Pobranie AWS Account ID i generowanie nazwy S3
+        id: aws-info
+        run: |
+          AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          VPC_SHORT="${{ vars.VPC_ID }}" 
+          VPC_SHORT="${VPC_SHORT: -8}"
+          BUCKET_NAME="secure-connect-gateway-tfstate-${AWS_ACCOUNT_ID}-${VPC_SHORT}"
+          
+          echo "bucket_name=${BUCKET_NAME}" >> $GITHUB_OUTPUT
+          echo "Bucket Name: ${BUCKET_NAME}"
+
+      - name: Tworzenie S3 bucketu dla Terraform state
         if: github.event.inputs.action == 'START'
         run: |
+          BUCKET_NAME="${{ steps.aws-info.outputs.bucket_name }}"
+          echo "Tworzenie S3 bucketu: $BUCKET_NAME"
+          
           aws s3api create-bucket \
-            --bucket secure-connect-gateway-tfstate \
+            --bucket "$BUCKET_NAME" \
             --region ${{ env.TFSTATE_REGION }} \
-            --create-bucket-configuration LocationConstraint=${{ env.TFSTATE_REGION }} 2>/dev/null || true
+            --create-bucket-configuration LocationConstraint=${{ env.TFSTATE_REGION }} 2>/dev/null || {
+              echo "ℹ️  Bucket już istnieje"
+            }
+          
+          # Włączenie versioning'u
+          aws s3api put-bucket-versioning \
+            --bucket "$BUCKET_NAME" \
+            --versioning-configuration Status=Enabled \
+            --region ${{ env.TFSTATE_REGION }} 2>/dev/null || true
+          
+          echo "✅ S3 bucket gotowy"
 
       - name: Inicjalizacja Terraform
         working-directory: ./terraform
         run: |
+          BUCKET_NAME="${{ steps.aws-info.outputs.bucket_name }}"
           terraform init \
-            -backend-config="bucket=secure-connect-gateway-tfstate" \
+            -backend-config="bucket=${BUCKET_NAME}" \
             -backend-config="key=terraform.tfstate" \
             -backend-config="region=${{ env.TFSTATE_REGION }}" \
             -backend-config="encrypt=true"
 
-      # Krok 1: Import lub utworzenie ECR Repository (potrzebne przed buildem)
       - name: Przygotowanie ECR Repository
         if: github.event.inputs.action == 'START'
         working-directory: ./terraform
@@ -105,7 +129,6 @@ jobs:
           docker build -t ${{ env.IMAGE_URI }} .
           docker push ${{ env.IMAGE_URI }}
 
-      # ===== START =====
       - name: Import istniejacych zasobow
         if: github.event.inputs.action == 'START'
         working-directory: ./terraform
@@ -221,13 +244,17 @@ jobs:
           echo ""
           echo "============================================"
 
-          echo "## BASTION GOTOWY" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          echo "$CMD" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+           echo "## BASTION GOTOWY" >> $GITHUB_STEP_SUMMARY
+           echo "" >> $GITHUB_STEP_SUMMARY
+           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+           echo "$CMD" >> $GITHUB_STEP_SUMMARY
+           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+           echo "" >> $GITHUB_STEP_SUMMARY
+           echo "### 📋 Informacje o S3 Backend" >> $GITHUB_STEP_SUMMARY
+           echo "Nazwa bucketu S3: \`${{ steps.aws-info.outputs.bucket_name }}\`" >> $GITHUB_STEP_SUMMARY
+           echo "" >> $GITHUB_STEP_SUMMARY
+           echo "**ZAPISZ TĘ NAZWĘ** - będzie potrzebna do ręcznego czyszczenia jeśli coś pójdzie nie tak!" >> $GITHUB_STEP_SUMMARY
 
-      # ===== STOP =====
       - name: Zatrzymanie serwisu
         if: github.event.inputs.action == 'STOP'
         run: |
@@ -279,15 +306,30 @@ jobs:
             fi
           done
 
-      - name: Usuwanie infrastruktury przez Terraform
+      - name: Inicjalizacja Terraform dla STOP
+        if: github.event.inputs.action == 'STOP'
+        working-directory: ./terraform
+        run: |
+          BUCKET_NAME="${{ steps.aws-info.outputs.bucket_name }}"
+          
+          echo "Inicjalizacja Terraform z backend z S3: ${BUCKET_NAME}"
+          terraform init \
+            -backend-config="bucket=${BUCKET_NAME}" \
+            -backend-config="key=terraform.tfstate" \
+            -backend-config="region=${{ env.TFSTATE_REGION }}" \
+            -backend-config="encrypt=true" \
+            -no-color
+
+      - name: Usuwanie infrastruktury przez Terraform (destroy)
         if: github.event.inputs.action == 'STOP'
         working-directory: ./terraform
         run: |
           echo "Usuwanie wszystkich zasobów Terraform..."
+          
           if ! terraform destroy -auto-approve \
             -var="vpc_id=${{ vars.VPC_ID }}" \
             -var="region=${{ env.AWS_REGION }}" \
-            -var="container_image=000000000000.dkr.ecr.eu-central-1.amazonaws.com/x:latest" \
+            -var="container_image=placeholder" \
             -var="auto_stop_cron=cron(0 23 * * ? *)"; then
             echo "❌ BŁĄD: Terraform destroy nie powiódł się!"
             exit 1
@@ -295,26 +337,18 @@ jobs:
           
           echo "✅ Wszystkie zasoby Terraform usunięte pomyślnie"
 
-      - name: Usuwanie S3 bucketu stanu Terraform
+      - name: Usuwanie S3 bucketu
         if: github.event.inputs.action == 'STOP' && success()
         run: |
-          BUCKET_NAME="secure-connect-gateway-tfstate"
-          echo "Czyszczenie i usuwanie S3 bucketu: $BUCKET_NAME"
+          BUCKET_NAME="${{ steps.aws-info.outputs.bucket_name }}"
+          echo "Usuwanie S3 bucketu: ${BUCKET_NAME}"
           
-          # Sprawdzenie czy bucket istnieje
-          if ! aws s3api head-bucket --bucket "$BUCKET_NAME" --region ${{ env.TFSTATE_REGION }} 2>/dev/null; then
-            echo "ℹ️  S3 bucket nie istnieje - nic do zrobienia"
-            exit 0
-          fi
-          
-          echo "Usuwanie wszystkich wersji obiektów..."
-          
-          # Usuń wszystkie wersje (dla bucketów z versioningiem)
+          # Wyczyść zawartość bucketu (wersje)
           aws s3api list-object-versions \
             --bucket "$BUCKET_NAME" \
             --region ${{ env.TFSTATE_REGION }} \
             --query 'Versions[*].[Key,VersionId]' \
-            --output text | while read -r key versionid; do
+            --output text 2>/dev/null | while read -r key versionid; do
               if [ -n "$key" ] && [ -n "$versionid" ]; then
                 aws s3api delete-object \
                   --bucket "$BUCKET_NAME" \
@@ -324,14 +358,12 @@ jobs:
               fi
             done
           
-          echo "Usuwanie DeleteMarkers..."
-          
-          # Usuń wszystkie DeleteMarkers
+          # Usuń Delete Markers
           aws s3api list-object-versions \
             --bucket "$BUCKET_NAME" \
             --region ${{ env.TFSTATE_REGION }} \
             --query 'DeleteMarkers[*].[Key,VersionId]' \
-            --output text | while read -r key versionid; do
+            --output text 2>/dev/null | while read -r key versionid; do
               if [ -n "$key" ] && [ -n "$versionid" ]; then
                 aws s3api delete-object \
                   --bucket "$BUCKET_NAME" \
@@ -341,13 +373,9 @@ jobs:
               fi
             done
           
-          echo "Czekanie na propagację..."
+          # Usuń bucket S3
           sleep 2
-          
-          echo "Usuwanie bucketu..."
-          if ! aws s3api delete-bucket \
-            --bucket "$BUCKET_NAME" \
-            --region ${{ env.TFSTATE_REGION }}; then
+          if ! aws s3api delete-bucket --bucket "$BUCKET_NAME" --region ${{ env.TFSTATE_REGION }}; then
             echo "❌ BŁĄD: Nie można usunąć S3 bucketu!"
             exit 1
           fi

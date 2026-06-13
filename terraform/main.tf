@@ -220,6 +220,21 @@ resource "aws_cloudwatch_log_group" "ecs_exec_logs" {
   }
 }
 
+resource "aws_cloudwatch_log_group" "container_insights" {
+  name              = "/aws/ecs/containerinsights/${aws_ecs_cluster.bastion_cluster.name}/performance"
+  retention_in_days = 1
+  skip_destroy      = false
+
+  tags = {
+    Environment = "ephemeral"
+    ManagedBy   = "terraform"
+  }
+
+  lifecycle {
+    ignore_changes = [retention_in_days]
+  }
+}
+
 # --- IAM ---
 
 # Rola wykonawcza zadania (Task Execution Role) - pobieranie obrazow, zapisywanie logow
