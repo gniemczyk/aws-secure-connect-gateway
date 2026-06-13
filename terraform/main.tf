@@ -449,6 +449,7 @@ resource "aws_lambda_function" "auto_stop" {
   handler         = "lambda_stop.lambda_handler"
   runtime         = "python3.11"
   source_code_hash = data.archive_file.lambda_zip.output_base64sha256
+  timeout          = 30
 
   environment {
     variables = {
@@ -505,5 +506,29 @@ resource "aws_cloudwatch_event_target" "auto_stop" {
   retry_policy {
     maximum_retry_attempts = 3
     maximum_event_age_in_seconds = 3600
+  }
+}
+
+# --- CLOUDWATCH ALARM ---
+
+resource "aws_cloudwatch_metric_alarm" "lambda_errors" {
+  alarm_name          = "${var.bastion_name}-auto-stop-errors"
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 1
+  metric_name         = "Errors"
+  namespace           = "AWS/Lambda"
+  period              = 300
+  statistic           = "Sum"
+  threshold           = 1
+  alarm_description   = "Alert: Lambda do zatrzymania bastionu się nie powiódł"
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    FunctionName = aws_lambda_function.auto_stop.function_name
+  }
+
+  tags = {
+    Environment = "ephemeral"
+    ManagedBy   = "terraform"
   }
 }
