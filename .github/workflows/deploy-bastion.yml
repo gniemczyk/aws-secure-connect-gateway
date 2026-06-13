@@ -51,12 +51,11 @@ jobs:
         id: aws-info
         run: |
           AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-          GITHUB_RUN_ID=${{ github.run_id }}
-          BUCKET_NAME="secure-connect-gateway-tfstate-${AWS_ACCOUNT_ID}-${GITHUB_RUN_ID}"
+          VPC_SHORT="${{ vars.VPC_ID }}" 
+          VPC_SHORT="${VPC_SHORT: -8}"
+          BUCKET_NAME="secure-connect-gateway-tfstate-${AWS_ACCOUNT_ID}-${VPC_SHORT}"
           
           echo "bucket_name=${BUCKET_NAME}" >> $GITHUB_OUTPUT
-          echo "Account ID: ${AWS_ACCOUNT_ID}"
-          echo "Run ID: ${GITHUB_RUN_ID}"
           echo "Bucket Name: ${BUCKET_NAME}"
 
       - name: Tworzenie S3 bucketu dla Terraform state
