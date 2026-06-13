@@ -41,75 +41,74 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-       - name: Instalacja Terraform
-         uses: hashicorp/setup-terraform@v3
-         with:
-           terraform_version: ${{ env.TERRAFORM_VERSION }}
-           terraform_wrapper: false
+      - name: Instalacja Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
 
-       - name: Pobranie AWS Account ID i generowanie nazwy S3
-         id: aws-info
-         run: |
-           AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-           GITHUB_RUN_ID=${{ github.run_id }}
-           BUCKET_NAME="secure-connect-gateway-tfstate-${AWS_ACCOUNT_ID}-${GITHUB_RUN_ID}"
-           
-           echo "bucket_name=${BUCKET_NAME}" >> $GITHUB_OUTPUT
-           echo "Account ID: ${AWS_ACCOUNT_ID}"
-           echo "Run ID: ${GITHUB_RUN_ID}"
-           echo "Bucket Name: ${BUCKET_NAME}"
+      - name: Pobranie AWS Account ID i generowanie nazwy S3
+        id: aws-info
+        run: |
+          AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          GITHUB_RUN_ID=${{ github.run_id }}
+          BUCKET_NAME="secure-connect-gateway-tfstate-${AWS_ACCOUNT_ID}-${GITHUB_RUN_ID}"
+          
+          echo "bucket_name=${BUCKET_NAME}" >> $GITHUB_OUTPUT
+          echo "Account ID: ${AWS_ACCOUNT_ID}"
+          echo "Run ID: ${GITHUB_RUN_ID}"
+          echo "Bucket Name: ${BUCKET_NAME}"
 
-       - name: Tworzenie S3 bucketu dla Terraform state
-         if: github.event.inputs.action == 'START'
-         run: |
-           BUCKET_NAME="${{ steps.aws-info.outputs.bucket_name }}"
-           echo "Tworzenie S3 bucketu: $BUCKET_NAME"
-           
-           aws s3api create-bucket \
-             --bucket "$BUCKET_NAME" \
-             --region ${{ env.TFSTATE_REGION }} \
-             --create-bucket-configuration LocationConstraint=${{ env.TFSTATE_REGION }} 2>/dev/null || {
-               echo "ℹ️  Bucket już istnieje"
-             }
-           
-           # Włączenie versioning'u
-           aws s3api put-bucket-versioning \
-             --bucket "$BUCKET_NAME" \
-             --versioning-configuration Status=Enabled \
-             --region ${{ env.TFSTATE_REGION }} 2>/dev/null || true
-           
-           echo "✅ S3 bucket gotowy"
+      - name: Tworzenie S3 bucketu dla Terraform state
+        if: github.event.inputs.action == 'START'
+        run: |
+          BUCKET_NAME="${{ steps.aws-info.outputs.bucket_name }}"
+          echo "Tworzenie S3 bucketu: $BUCKET_NAME"
+          
+          aws s3api create-bucket \
+            --bucket "$BUCKET_NAME" \
+            --region ${{ env.TFSTATE_REGION }} \
+            --create-bucket-configuration LocationConstraint=${{ env.TFSTATE_REGION }} 2>/dev/null || {
+              echo "ℹ️  Bucket już istnieje"
+            }
+          
+          # Włączenie versioning'u
+          aws s3api put-bucket-versioning \
+            --bucket "$BUCKET_NAME" \
+            --versioning-configuration Status=Enabled \
+            --region ${{ env.TFSTATE_REGION }} 2>/dev/null || true
+          
+          echo "✅ S3 bucket gotowy"
 
-       - name: Inicjalizacja Terraform
-         working-directory: ./terraform
-         run: |
-           BUCKET_NAME="${{ steps.aws-info.outputs.bucket_name }}"
-           terraform init \
-             -backend-config="bucket=${BUCKET_NAME}" \
-             -backend-config="key=terraform.tfstate" \
-             -backend-config="region=${{ env.TFSTATE_REGION }}" \
-             -backend-config="encrypt=true"
+      - name: Inicjalizacja Terraform
+        working-directory: ./terraform
+        run: |
+          BUCKET_NAME="${{ steps.aws-info.outputs.bucket_name }}"
+          terraform init \
+            -backend-config="bucket=${BUCKET_NAME}" \
+            -backend-config="key=terraform.tfstate" \
+            -backend-config="region=${{ env.TFSTATE_REGION }}" \
+            -backend-config="encrypt=true"
 
-       # Krok 1: Import lub utworzenie ECR Repository (potrzebne przed buildem)
-        - name: Przygotowanie ECR Repository
-          if: github.event.inputs.action == 'START'
-          working-directory: ./terraform
-          run: |
-            # Najpierw spróbuj zaimportować istniejący ECR
-            terraform import \
-              -var="vpc_id=${{ vars.VPC_ID }}" \
-              -var="region=${{ env.AWS_REGION }}" \
-              -var="container_image=placeholder" \
-              -var="auto_stop_cron=cron(0 23 * * ? *)" \
-              aws_ecr_repository.bastion "${{ env.ECR_REPOSITORY }}" 2>/dev/null || true
-            
-            # Następnie apply (utworzy jeśli nie istnieje, lub odświeży jeśli istnieje)
-            terraform apply -auto-approve \
-              -target=aws_ecr_repository.bastion \
-              -var="vpc_id=${{ vars.VPC_ID }}" \
-              -var="region=${{ env.AWS_REGION }}" \
-              -var="container_image=placeholder" \
-              -var="auto_stop_cron=cron(0 23 * * ? *)"
+      - name: Przygotowanie ECR Repository
+        if: github.event.inputs.action == 'START'
+        working-directory: ./terraform
+        run: |
+          # Najpierw spróbuj zaimportować istniejący ECR
+          terraform import \
+            -var="vpc_id=${{ vars.VPC_ID }}" \
+            -var="region=${{ env.AWS_REGION }}" \
+            -var="container_image=placeholder" \
+            -var="auto_stop_cron=cron(0 23 * * ? *)" \
+            aws_ecr_repository.bastion "${{ env.ECR_REPOSITORY }}" 2>/dev/null || true
+          
+          # Następnie apply (utworzy jeśli nie istnieje, lub odświeży jeśli istnieje)
+          terraform apply -auto-approve \
+            -target=aws_ecr_repository.bastion \
+            -var="vpc_id=${{ vars.VPC_ID }}" \
+            -var="region=${{ env.AWS_REGION }}" \
+            -var="container_image=placeholder" \
+            -var="auto_stop_cron=cron(0 23 * * ? *)"
 
       - name: Pobranie URL repozytorium ECR
         if: github.event.inputs.action == 'START'
@@ -131,49 +130,48 @@ jobs:
           docker build -t ${{ env.IMAGE_URI }} .
           docker push ${{ env.IMAGE_URI }}
 
-       # ===== START =====
-       - name: Import istniejacych zasobow
-         if: github.event.inputs.action == 'START'
-         working-directory: ./terraform
-         run: |
-           TF_VARS="-var=vpc_id=${{ vars.VPC_ID }} -var=region=${{ env.AWS_REGION }} -var=container_image=${{ env.IMAGE_URI }} -var=auto_stop_cron=${{ github.event.inputs.auto_stop_cron || 'cron(0 23 * * ? *)' }}"
+      - name: Import istniejacych zasobow
+        if: github.event.inputs.action == 'START'
+        working-directory: ./terraform
+        run: |
+          TF_VARS="-var=vpc_id=${{ vars.VPC_ID }} -var=region=${{ env.AWS_REGION }} -var=container_image=${{ env.IMAGE_URI }} -var=auto_stop_cron=${{ github.event.inputs.auto_stop_cron || 'cron(0 23 * * ? *)' }}"
 
-           terraform state rm random_id.serveo_suffix 2>/dev/null || true
+          terraform state rm random_id.serveo_suffix 2>/dev/null || true
 
-           terraform import $TF_VARS \
-             aws_iam_role.ecs_task_execution_role "${{ env.BASTION_NAME }}-exec-role" 2>/dev/null || true
-           terraform import $TF_VARS \
-             aws_iam_role_policy_attachment.ecs_exec_policy "${{ env.BASTION_NAME }}-exec-role/arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy" 2>/dev/null || true
-           terraform import $TF_VARS \
-             aws_iam_role.ecs_task_role "${{ env.BASTION_NAME }}-task-role" 2>/dev/null || true
-           terraform import $TF_VARS \
-             aws_ecs_cluster.bastion_cluster "${{ env.BASTION_NAME }}-cluster" 2>/dev/null || true
-           terraform import $TF_VARS \
-             aws_ecs_service.bastion_service "${{ env.BASTION_NAME }}-cluster/${{ env.BASTION_NAME }}-service" 2>/dev/null || true
-           terraform import $TF_VARS \
-             aws_cloudwatch_log_group.bastion_logs "/ecs/${{ env.BASTION_NAME }}" 2>/dev/null || true
-           terraform import $TF_VARS \
-             aws_cloudwatch_log_group.ecs_exec_logs "/ecs/${{ env.BASTION_NAME }}-exec" 2>/dev/null || true
-           terraform import $TF_VARS \
-             aws_iam_role.lambda_role "${{ env.BASTION_NAME }}-lambda-role" 2>/dev/null || true
-           terraform import $TF_VARS \
-             aws_lambda_function.auto_stop "${{ env.BASTION_NAME }}-auto-stop" 2>/dev/null || true
-           terraform import $TF_VARS \
-             aws_cloudwatch_log_group.lambda_logs "/aws/lambda/${{ env.BASTION_NAME }}-auto-stop" 2>/dev/null || true
-           terraform import $TF_VARS \
-             aws_cloudwatch_event_rule.auto_stop "${{ env.BASTION_NAME }}-auto-stop" 2>/dev/null || true
-           terraform import $TF_VARS \
-             aws_cloudwatch_event_target.auto_stop "${{ env.BASTION_NAME }}-auto-stop/${{ env.BASTION_NAME }}-auto-stop-target" 2>/dev/null || true
+          terraform import $TF_VARS \
+            aws_iam_role.ecs_task_execution_role "${{ env.BASTION_NAME }}-exec-role" 2>/dev/null || true
+          terraform import $TF_VARS \
+            aws_iam_role_policy_attachment.ecs_exec_policy "${{ env.BASTION_NAME }}-exec-role/arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy" 2>/dev/null || true
+          terraform import $TF_VARS \
+            aws_iam_role.ecs_task_role "${{ env.BASTION_NAME }}-task-role" 2>/dev/null || true
+          terraform import $TF_VARS \
+            aws_ecs_cluster.bastion_cluster "${{ env.BASTION_NAME }}-cluster" 2>/dev/null || true
+          terraform import $TF_VARS \
+            aws_ecs_service.bastion_service "${{ env.BASTION_NAME }}-cluster/${{ env.BASTION_NAME }}-service" 2>/dev/null || true
+          terraform import $TF_VARS \
+            aws_cloudwatch_log_group.bastion_logs "/ecs/${{ env.BASTION_NAME }}" 2>/dev/null || true
+          terraform import $TF_VARS \
+            aws_cloudwatch_log_group.ecs_exec_logs "/ecs/${{ env.BASTION_NAME }}-exec" 2>/dev/null || true
+          terraform import $TF_VARS \
+            aws_iam_role.lambda_role "${{ env.BASTION_NAME }}-lambda-role" 2>/dev/null || true
+          terraform import $TF_VARS \
+            aws_lambda_function.auto_stop "${{ env.BASTION_NAME }}-auto-stop" 2>/dev/null || true
+          terraform import $TF_VARS \
+            aws_cloudwatch_log_group.lambda_logs "/aws/lambda/${{ env.BASTION_NAME }}-auto-stop" 2>/dev/null || true
+          terraform import $TF_VARS \
+            aws_cloudwatch_event_rule.auto_stop "${{ env.BASTION_NAME }}-auto-stop" 2>/dev/null || true
+          terraform import $TF_VARS \
+            aws_cloudwatch_event_target.auto_stop "${{ env.BASTION_NAME }}-auto-stop/${{ env.BASTION_NAME }}-auto-stop-target" 2>/dev/null || true
 
-       - name: Wdrozenie infrastruktury
-         if: github.event.inputs.action == 'START'
-         working-directory: ./terraform
-         run: |
-           terraform apply -auto-approve \
-             -var="vpc_id=${{ vars.VPC_ID }}" \
-             -var="region=${{ env.AWS_REGION }}" \
-             -var="container_image=${{ env.IMAGE_URI }}" \
-             -var="auto_stop_cron=${{ github.event.inputs.auto_stop_cron || 'cron(0 23 * * ? *)' }}"
+      - name: Wdrozenie infrastruktury
+        if: github.event.inputs.action == 'START'
+        working-directory: ./terraform
+        run: |
+          terraform apply -auto-approve \
+            -var="vpc_id=${{ vars.VPC_ID }}" \
+            -var="region=${{ env.AWS_REGION }}" \
+            -var="container_image=${{ env.IMAGE_URI }}" \
+            -var="auto_stop_cron=${{ github.event.inputs.auto_stop_cron || 'cron(0 23 * * ? *)' }}"
 
       - name: Pobranie danych z Terraform
         if: github.event.inputs.action == 'START'
@@ -258,133 +256,132 @@ jobs:
            echo "" >> $GITHUB_STEP_SUMMARY
            echo "**ZAPISZ TĘ NAZWĘ** - będzie potrzebna do ręcznego czyszczenia jeśli coś pójdzie nie tak!" >> $GITHUB_STEP_SUMMARY
 
-       # ===== STOP =====
-       - name: Zatrzymanie serwisu
-         if: github.event.inputs.action == 'STOP'
-         run: |
-           echo "Zatrzymywanie bastionu..."
-           aws ecs update-service \
-             --cluster "${{ env.BASTION_NAME }}-cluster" \
-             --service "${{ env.BASTION_NAME }}-service" \
-             --desired-count 0 \
-             --region ${{ env.AWS_REGION }} > /dev/null 2>&1 || true
+      - name: Zatrzymanie serwisu
+        if: github.event.inputs.action == 'STOP'
+        run: |
+          echo "Zatrzymywanie bastionu..."
+          aws ecs update-service \
+            --cluster "${{ env.BASTION_NAME }}-cluster" \
+            --service "${{ env.BASTION_NAME }}-service" \
+            --desired-count 0 \
+            --region ${{ env.AWS_REGION }} > /dev/null 2>&1 || true
 
-           echo "Czekanie na zatrzymanie tasku..."
-           for i in $(seq 1 12); do
-             COUNT=$(aws ecs list-tasks --cluster "${{ env.BASTION_NAME }}-cluster" \
-               --service-name "${{ env.BASTION_NAME }}-service" \
-               --desired-status RUNNING --region ${{ env.AWS_REGION }} \
-               --query 'length(taskArns)' --output text 2>/dev/null || echo "0")
-             if [ "$COUNT" = "0" ]; then
-               echo "Task zatrzymany."
-               break
-             fi
-             echo "[$i/12] Jeszcze dziala ($COUNT tasks)..."
-             sleep 5
-           done
+          echo "Czekanie na zatrzymanie tasku..."
+          for i in $(seq 1 12); do
+            COUNT=$(aws ecs list-tasks --cluster "${{ env.BASTION_NAME }}-cluster" \
+              --service-name "${{ env.BASTION_NAME }}-service" \
+              --desired-status RUNNING --region ${{ env.AWS_REGION }} \
+              --query 'length(taskArns)' --output text 2>/dev/null || echo "0")
+            if [ "$COUNT" = "0" ]; then
+              echo "Task zatrzymany."
+              break
+            fi
+            echo "[$i/12] Jeszcze dziala ($COUNT tasks)..."
+            sleep 5
+          done
 
-       - name: Czyszczenie obrazow ECR
-         if: github.event.inputs.action == 'STOP'
-         run: |
-           echo "Usuwanie wszystkich obrazow z ECR..."
-           REPO="${{ env.ECR_REPOSITORY }}"
-           
-           # Spróbuj obu regionów - AWS_REGION i TFSTATE_REGION
-           for REGION in ${{ env.AWS_REGION }} ${{ env.TFSTATE_REGION }}; do
-             echo "Sprawdzanie regionu: $REGION"
-             IMAGES=$(aws ecr list-images --repository-name "$REPO" --region "$REGION" \
-               --query 'imageIds[*]' --output json 2>/dev/null || echo '[]')
-             
-             if [ "$IMAGES" != "[]" ] && [ "$IMAGES" != "" ] && [ "$IMAGES" != "null" ]; then
-               echo "Znaleziono obrazy w regionie $REGION:"
-               echo "$IMAGES"
-               # Kompaktujemy JSON do jednej linii i przekazujemy przez --image-ids
-               IMAGES_COMPACT=$(echo "$IMAGES" | jq -c '.')
-               aws ecr batch-delete-image \
-                 --repository-name "$REPO" \
-                 --region "$REGION" \
-                 --image-ids "$IMAGES_COMPACT"
-               echo "Obrazy usuniete z regionu $REGION."
-             else
-               echo "Brak obrazow w regionie $REGION."
-             fi
-           done
+      - name: Czyszczenie obrazow ECR
+        if: github.event.inputs.action == 'STOP'
+        run: |
+          echo "Usuwanie wszystkich obrazow z ECR..."
+          REPO="${{ env.ECR_REPOSITORY }}"
+          
+          # Spróbuj obu regionów - AWS_REGION i TFSTATE_REGION
+          for REGION in ${{ env.AWS_REGION }} ${{ env.TFSTATE_REGION }}; do
+            echo "Sprawdzanie regionu: $REGION"
+            IMAGES=$(aws ecr list-images --repository-name "$REPO" --region "$REGION" \
+              --query 'imageIds[*]' --output json 2>/dev/null || echo '[]')
+            
+            if [ "$IMAGES" != "[]" ] && [ "$IMAGES" != "" ] && [ "$IMAGES" != "null" ]; then
+              echo "Znaleziono obrazy w regionie $REGION:"
+              echo "$IMAGES"
+              # Kompaktujemy JSON do jednej linii i przekazujemy przez --image-ids
+              IMAGES_COMPACT=$(echo "$IMAGES" | jq -c '.')
+              aws ecr batch-delete-image \
+                --repository-name "$REPO" \
+                --region "$REGION" \
+                --image-ids "$IMAGES_COMPACT"
+              echo "Obrazy usuniete z regionu $REGION."
+            else
+              echo "Brak obrazow w regionie $REGION."
+            fi
+          done
 
-       - name: Inicjalizacja Terraform dla STOP
-         if: github.event.inputs.action == 'STOP'
-         working-directory: ./terraform
-         run: |
-           BUCKET_NAME="${{ steps.aws-info.outputs.bucket_name }}"
-           
-           echo "Inicjalizacja Terraform z backend z S3: ${BUCKET_NAME}"
-           terraform init \
-             -backend-config="bucket=${BUCKET_NAME}" \
-             -backend-config="key=terraform.tfstate" \
-             -backend-config="region=${{ env.TFSTATE_REGION }}" \
-             -backend-config="encrypt=true" \
-             -no-color
+      - name: Inicjalizacja Terraform dla STOP
+        if: github.event.inputs.action == 'STOP'
+        working-directory: ./terraform
+        run: |
+          BUCKET_NAME="${{ steps.aws-info.outputs.bucket_name }}"
+          
+          echo "Inicjalizacja Terraform z backend z S3: ${BUCKET_NAME}"
+          terraform init \
+            -backend-config="bucket=${BUCKET_NAME}" \
+            -backend-config="key=terraform.tfstate" \
+            -backend-config="region=${{ env.TFSTATE_REGION }}" \
+            -backend-config="encrypt=true" \
+            -no-color
 
-       - name: Usuwanie infrastruktury przez Terraform (destroy)
-         if: github.event.inputs.action == 'STOP'
-         working-directory: ./terraform
-         run: |
-           echo "Usuwanie wszystkich zasobów Terraform..."
-           
-           if ! terraform destroy -auto-approve \
-             -var="vpc_id=${{ vars.VPC_ID }}" \
-             -var="region=${{ env.AWS_REGION }}" \
-             -var="container_image=placeholder" \
-             -var="auto_stop_cron=cron(0 23 * * ? *)"; then
-             echo "❌ BŁĄD: Terraform destroy nie powiódł się!"
-             exit 1
-           fi
-           
-           echo "✅ Wszystkie zasoby Terraform usunięte pomyślnie"
+      - name: Usuwanie infrastruktury przez Terraform (destroy)
+        if: github.event.inputs.action == 'STOP'
+        working-directory: ./terraform
+        run: |
+          echo "Usuwanie wszystkich zasobów Terraform..."
+          
+          if ! terraform destroy -auto-approve \
+            -var="vpc_id=${{ vars.VPC_ID }}" \
+            -var="region=${{ env.AWS_REGION }}" \
+            -var="container_image=placeholder" \
+            -var="auto_stop_cron=cron(0 23 * * ? *)"; then
+            echo "❌ BŁĄD: Terraform destroy nie powiódł się!"
+            exit 1
+          fi
+          
+          echo "✅ Wszystkie zasoby Terraform usunięte pomyślnie"
 
-       - name: Usuwanie S3 bucketu
-         if: github.event.inputs.action == 'STOP' && success()
-         run: |
-           BUCKET_NAME="${{ steps.aws-info.outputs.bucket_name }}"
-           echo "Usuwanie S3 bucketu: ${BUCKET_NAME}"
-           
-           # Wyczyść zawartość bucketu (wersje)
-           aws s3api list-object-versions \
-             --bucket "$BUCKET_NAME" \
-             --region ${{ env.TFSTATE_REGION }} \
-             --query 'Versions[*].[Key,VersionId]' \
-             --output text 2>/dev/null | while read -r key versionid; do
-               if [ -n "$key" ] && [ -n "$versionid" ]; then
-                 aws s3api delete-object \
-                   --bucket "$BUCKET_NAME" \
-                   --key "$key" \
-                   --version-id "$versionid" \
-                   --region ${{ env.TFSTATE_REGION }} 2>/dev/null || true
-               fi
-             done
-           
-           # Usuń Delete Markers
-           aws s3api list-object-versions \
-             --bucket "$BUCKET_NAME" \
-             --region ${{ env.TFSTATE_REGION }} \
-             --query 'DeleteMarkers[*].[Key,VersionId]' \
-             --output text 2>/dev/null | while read -r key versionid; do
-               if [ -n "$key" ] && [ -n "$versionid" ]; then
-                 aws s3api delete-object \
-                   --bucket "$BUCKET_NAME" \
-                   --key "$key" \
-                   --version-id "$versionid" \
-                   --region ${{ env.TFSTATE_REGION }} 2>/dev/null || true
-               fi
-             done
-           
-           # Usuń bucket S3
-           sleep 2
-           if ! aws s3api delete-bucket --bucket "$BUCKET_NAME" --region ${{ env.TFSTATE_REGION }}; then
-             echo "❌ BŁĄD: Nie można usunąć S3 bucketu!"
-             exit 1
-           fi
-           
-           echo "✅ S3 bucket usunięty pomyślnie"
+      - name: Usuwanie S3 bucketu
+        if: github.event.inputs.action == 'STOP' && success()
+        run: |
+          BUCKET_NAME="${{ steps.aws-info.outputs.bucket_name }}"
+          echo "Usuwanie S3 bucketu: ${BUCKET_NAME}"
+          
+          # Wyczyść zawartość bucketu (wersje)
+          aws s3api list-object-versions \
+            --bucket "$BUCKET_NAME" \
+            --region ${{ env.TFSTATE_REGION }} \
+            --query 'Versions[*].[Key,VersionId]' \
+            --output text 2>/dev/null | while read -r key versionid; do
+              if [ -n "$key" ] && [ -n "$versionid" ]; then
+                aws s3api delete-object \
+                  --bucket "$BUCKET_NAME" \
+                  --key "$key" \
+                  --version-id "$versionid" \
+                  --region ${{ env.TFSTATE_REGION }} 2>/dev/null || true
+              fi
+            done
+          
+          # Usuń Delete Markers
+          aws s3api list-object-versions \
+            --bucket "$BUCKET_NAME" \
+            --region ${{ env.TFSTATE_REGION }} \
+            --query 'DeleteMarkers[*].[Key,VersionId]' \
+            --output text 2>/dev/null | while read -r key versionid; do
+              if [ -n "$key" ] && [ -n "$versionid" ]; then
+                aws s3api delete-object \
+                  --bucket "$BUCKET_NAME" \
+                  --key "$key" \
+                  --version-id "$versionid" \
+                  --region ${{ env.TFSTATE_REGION }} 2>/dev/null || true
+              fi
+            done
+          
+          # Usuń bucket S3
+          sleep 2
+          if ! aws s3api delete-bucket --bucket "$BUCKET_NAME" --region ${{ env.TFSTATE_REGION }}; then
+            echo "❌ BŁĄD: Nie można usunąć S3 bucketu!"
+            exit 1
+          fi
+          
+          echo "✅ S3 bucket usunięty pomyślnie"
 
       - name: Potwierdzenie zatrzymania - SUKCES
         if: github.event.inputs.action == 'STOP' && success()
