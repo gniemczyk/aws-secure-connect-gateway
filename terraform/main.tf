@@ -36,9 +36,9 @@ resource "aws_ecr_lifecycle_policy" "bastion" {
         rulePriority = 1
         description  = "Zachowaj tylko 2 najnowsze obrazy"
         selection = {
-          tagStatus     = "any"
-          countType     = "imageCountMoreThan"
-          countNumber   = 2
+          tagStatus   = "any"
+          countType   = "imageCountMoreThan"
+          countNumber = 2
         }
         action = {
           type = "expire"
@@ -499,9 +499,9 @@ resource "aws_iam_role_policy" "lambda_ecs_policy" {
 resource "aws_lambda_function" "auto_stop" {
   filename         = data.archive_file.lambda_zip.output_path
   function_name    = "${var.bastion_name}-auto-stop"
-  role            = aws_iam_role.lambda_role.arn
-  handler         = "lambda_stop.lambda_handler"
-  runtime         = "python3.11"
+  role             = aws_iam_role.lambda_role.arn
+  handler          = "lambda_stop.lambda_handler"
+  runtime          = "python3.11"
   source_code_hash = data.archive_file.lambda_zip.output_base64sha256
   timeout          = 30
 
@@ -553,12 +553,12 @@ resource "aws_cloudwatch_event_rule" "auto_stop" {
 }
 
 resource "aws_cloudwatch_event_target" "auto_stop" {
-  rule           = aws_cloudwatch_event_rule.auto_stop.name
-  target_id      = "${var.bastion_name}-auto-stop-target"
-  arn            = aws_lambda_function.auto_stop.arn
+  rule      = aws_cloudwatch_event_rule.auto_stop.name
+  target_id = "${var.bastion_name}-auto-stop-target"
+  arn       = aws_lambda_function.auto_stop.arn
 
   retry_policy {
-    maximum_retry_attempts = 3
+    maximum_retry_attempts       = 3
     maximum_event_age_in_seconds = 3600
   }
 }

@@ -37,10 +37,13 @@ jobs:
       - name: Pobranie repozytorium
         uses: actions/checkout@v4
 
-      - name: Skanowanie IaC i plików projektu (Trivy)
-        uses: aquasecurity/trivy-action@v0.28.0
-        with:
-          scan-type: 'config'
-          exit-code: '1'
-          ignore-unfixed: true
-          severity: 'HIGH,CRITICAL'
+      - name: Instalacja Trivy
+        run: |
+          sudo apt-get install -y wget apt-transport-https gnupg
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | gpg --dearmor | sudo tee /usr/share/keyrings/trivy.gpg > /dev/null
+          echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update
+          sudo apt-get install -y trivy
+
+      - name: Skanowanie IaC i Dockerfile (Trivy)
+        run: trivy config --exit-code 1 --severity HIGH,CRITICAL .
