@@ -81,11 +81,36 @@ data "aws_availability_zones" "available" {
 }
 
 locals {
-  vpc_cidr           = data.aws_vpc.selected.cidr_block
-  existing_cidrs     = toset([for subnet in data.aws_subnet.existing : subnet.cidr_block])
-  all_possible_cidrs = [for idx in range(0, 256) : cidrsubnet(local.vpc_cidr, 8, idx)]
-  available_cidrs    = [for cidr in local.all_possible_cidrs : cidr if !contains(local.existing_cidrs, cidr)]
-  new_subnet_cidr    = length(local.available_cidrs) > 0 ? local.available_cidrs[0] : local.all_possible_cidrs[0]
+  vpc_cidr       = data.aws_vpc.selected.cidr_block
+  vpc_prefix_len = tonumber(split("/", local.vpc_cidr)[1])
+
+  # Dynamicznie oblicz newbits aby zawsze tworzyc /24 subnety
+  # VPC /16 -> newbits=8 (256 subnetow), VPC /20 -> newbits=4 (16 subnetow)
+  subnet_newbits = 24 - local.vpc_prefix_len
+  max_subnets    = pow(2, local.subnet_newbits)
+
+  existing_cidrs = [for subnet in data.aws_subnet.existing : subnet.cidr_block]
+
+  # Generuj wszystkie mozliwe /24 subnety w VPC
+  all_possible_cidrs = [
+    for idx in range(0, local.max_subnets) : cidrsubnet(local.vpc_cidr, local.subnet_newbits, idx)
+  ]
+
+  # Filtruj subnety ktore nakladaja sie z istniejacymi (w obu kierunkach)
+  # cidrcontains() sprawdza zawartosc zakresow, nie tylko dokladne dopasowanie
+  available_cidrs = [
+    for cidr in local.all_possible_cidrs : cidr
+    if !anytrue([
+      for existing in local.existing_cidrs :
+      # Czy istniejacy subnet zawiera nasz kandydat (np. istniejacy /20 zawiera nasz /24)
+      cidrcontains(existing, cidr) ||
+      # Czy nasz kandydat zawiera istniejacy subnet (np. istniejacy /28 jest w naszym /24)
+      cidrcontains(cidr, existing)
+    ])
+  ]
+
+  # Fallback - wartosc nigdy nie zostanie uzyta dzieki precondition na uzyciu
+  new_subnet_cidr = length(local.available_cidrs) > 0 ? local.available_cidrs[0] : "0.0.0.0/32"
 }
 
 resource "aws_subnet" "bastion_subnet" {
@@ -98,6 +123,13 @@ resource "aws_subnet" "bastion_subnet" {
     Name        = "${var.bastion_name}-subnet"
     Environment = "ephemeral"
     ManagedBy   = "terraform"
+  }
+
+  lifecycle {
+    precondition {
+      condition     = length(local.available_cidrs) > 0
+      error_message = "Brak wolnych /24 CIDR w VPC ${var.vpc_id} (CIDR: ${local.vpc_cidr}). Wszystkie ${local.max_subnets} mozliwych subnetow /24 sa zajete lub nakladaja sie z istniejacymi subnetami."
+    }
   }
 }
 
