@@ -82,6 +82,23 @@ Settings → Secrets and variables → Actions → Variables:
    - `CloudWatchLogsFullAccess`
    - `IAMFullAccess` (dla tworzenia task roles)
    - `AmazonSSMFullAccess` (dla ECS Exec)
+   - `AWSLambda_FullAccess` (dla Lambda auto-stop)
+
+### 5. Uprawnienia użytkownika (connect.sh)
+
+Użytkownik łączący się przez `connect.sh` potrzebuje następujących uprawnień IAM:
+
+```
+ecs:ExecuteCommand          # sesja shell
+ecs:ListTasks               # szukanie taska
+ecs:DescribeTasks           # status taska i SSM agent
+ecs:DescribeClusters        # sprawdzenie czy klaster istnieje
+ecs:UpdateService           # start bastionu (desired-count)
+ssm:StartSession            # port forwarding
+lambda:InvokeFunction       # stop bastionu
+events:DescribeRule         # odczyt cron auto-stop
+events:PutRule              # zmiana cron auto-stop
+```
 
 ## Użycie
 
@@ -130,13 +147,26 @@ Można też pominąć pytanie przez zmienną środowiskową:
 BASTION_NAME=my-bastion ./connect.sh
 ```
 
-#### Jak działa restart
+#### Jak działa connect.sh
 
-Skrypt wykryje brak running taska i zaproponuje:
-1. Ponowne uruchomienie bastionu (`aws ecs update-service --desired-count 1`)
-2. Zmianę harmonogramu auto-stop (np. `cron(0 21 * * ? *)` = 21:00 UTC)
-3. Poczeka na uruchomienie taska i SSM Agenta
-4. Przejdzie do menu (shell / port forwarding)
+Skrypt wyświetla menu dostosowane do stanu bastionu:
+
+**Bastion ZATRZYMANY:**
+```
+1) Uruchom bastion (start)
+2) Wyjście
+```
+
+**Bastion RUNNING:**
+```
+1) Interaktywna sesja Shell (Terminal w bastionie)
+2) Port Forwarding (Tunel do bazy danych/serwisu w VPC)
+3) Zatrzymaj bastion (stop)
+4) Wyjście
+```
+
+Start uruchamia serwis ECS (`desired-count 1`), czeka na task i SSM Agent, potem prosi o ponowne uruchomienie skryptu.
+Stop wywołuje Lambda `{nazwa}-auto-stop` (ta sama co EventBridge cron).
 
 ### CI Gate - walidacja przed deploy
 
@@ -227,7 +257,8 @@ Aby to zrobić, uruchom lokalnie skrypt:
 Skrypt zapyta o:
 - Wybór profilu AWS (jeśli masz wiele)
 - Wybór regionu (lub użyj z konfiguracji)
-- Opcję połączenia (shell lub port forwarding)
+- Nazwę bastionu (Enter = domyślna)
+- Akcję: shell, port forwarding, stop (gdy bastion działa) lub start (gdy zatrzymany)
 
 Wybierz opcję `2) Port Forwarding` i podaj dane hosta docelowego w VPC (np. endpoint bazy danych) oraz porty. Skrypt automatycznie zestawi bezpieczny tunel.
 
@@ -244,9 +275,10 @@ Wybierz opcję `2) Port Forwarding` i podaj dane hosta docelowego w VPC (np. end
 │   ├── lambda_stop.py        # Lambda auto-stop (Python) - pakowana przez archive_file
 │   ├── variables.tf          # Zmienne
 │   └── outputs.tf            # Outputy
+├── .trivyignore              # Celowe wyjatki skanowania bezpieczenstwa (z uzasadnieniem)
 ├── Dockerfile                # Minimal Alpine (~5-7 MB) - pakiety instalowane na żądanie
 ├── start.sh                  # Keepalive script
-├── connect.sh                # Lokalny skrypt do laczenia, tunelowania i restartu bastionu (SSM)
+├── connect.sh                # Lokalny skrypt do laczenia, start/stop i tunelowania (SSM)
 └── README.md
 ```
 
