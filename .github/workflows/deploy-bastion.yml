@@ -186,8 +186,6 @@ jobs:
             aws_cloudwatch_event_rule.auto_stop "${{ env.BASTION_NAME }}-auto-stop" 2>/dev/null || true
           terraform import $TF_VARS \
             aws_cloudwatch_event_target.auto_stop "${{ env.BASTION_NAME }}-auto-stop/${{ env.BASTION_NAME }}-auto-stop-target" 2>/dev/null || true
-          terraform import $TF_VARS \
-            aws_cloudwatch_log_group.container_insights "/aws/ecs/containerinsights/${{ env.BASTION_NAME }}-cluster/performance" 2>/dev/null || true
 
       - name: Wdrozenie infrastruktury
         if: github.event.inputs.action == 'START'
@@ -363,6 +361,15 @@ jobs:
           fi
           
           echo "✅ Wszystkie zasoby Terraform usunięte pomyślnie"
+
+      - name: Usuwanie log group Container Insights
+        if: github.event.inputs.action == 'STOP'
+        run: |
+          LOG_GROUP="/aws/ecs/containerinsights/${{ env.BASTION_NAME }}-cluster/performance"
+          echo "Usuwanie log group: $LOG_GROUP"
+          aws logs delete-log-group \
+            --log-group-name "$LOG_GROUP" \
+            --region ${{ env.AWS_REGION }} 2>/dev/null || echo "Log group nie istnieje lub juz usuniety"
 
       - name: Usuwanie S3 bucketu
         if: github.event.inputs.action == 'STOP' && success()
