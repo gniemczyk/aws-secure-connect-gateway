@@ -11,7 +11,7 @@ resource "aws_ecr_repository" "bastion" {
   image_tag_mutability = "MUTABLE"
 
   image_scanning_configuration {
-    scan_on_push = false
+    scan_on_push = true
   }
 
   # Pozwala usunąć repozytorium nawet z obrazami przy terraform destroy
