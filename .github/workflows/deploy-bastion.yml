@@ -186,6 +186,8 @@ jobs:
             aws_cloudwatch_event_rule.auto_stop "${{ env.BASTION_NAME }}-auto-stop" 2>/dev/null || true
           terraform import $TF_VARS \
             aws_cloudwatch_event_target.auto_stop "${{ env.BASTION_NAME }}-auto-stop/${{ env.BASTION_NAME }}-auto-stop-target" 2>/dev/null || true
+          terraform import $TF_VARS \
+            aws_cloudwatch_log_group.container_insights "/aws/ecs/containerinsights/${{ env.BASTION_NAME }}-cluster/performance" 2>/dev/null || true
 
       - name: Wdrozenie infrastruktury
         if: github.event.inputs.action == 'START'

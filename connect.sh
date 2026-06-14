@@ -124,137 +124,144 @@ TASK_ARN=$(aws_cmd ecs list-tasks \
     --query 'taskArns[0]' \
     --output text 2>/dev/null || echo "")
 
-if [ -z "$TASK_ARN" ] || [ "$TASK_ARN" = "None" ]; then
-    echo -e "${YELLOW}Bastion nie jest uruchomiony (zostal wylaczony przez auto-stop lub recznie).${NC}"
-    read -rp "Czy chcesz uruchomic bastion ponownie? (T/n): " RESTART_CHOICE
-
-    if [[ "$RESTART_CHOICE" =~ ^[Nn]$ ]]; then
-        echo -e "Zakonczono."
-        exit 0
-    fi
-
-    # Pobranie aktualnego crona z EventBridge
-    RULE_NAME="${CLUSTER_NAME%-cluster}-auto-stop"
-    CURRENT_CRON=$(aws_cmd events describe-rule \
-        --name "$RULE_NAME" \
-        --region "$AWS_REGION" \
-        --query 'ScheduleExpression' \
-        --output text 2>/dev/null || echo "cron(0 23 * * ? *)")
-
-    echo -e "Aktualny cron auto-stop (UTC): ${GREEN}${CURRENT_CRON}${NC}"
-    echo -e "${YELLOW}Podaj nowy cron auto-stop (UTC) lub wcisnij Enter aby zachowac aktualny:${NC}"
-    echo -e "  Przyklady: cron(0 23 * * ? *)  = codziennie 23:00 UTC"
-    echo -e "             cron(0 18 * * ? *)  = codziennie 18:00 UTC"
-    echo -e "             cron(0 21 * * ? *)  = codziennie 21:00 UTC"
-    read -rp "Cron [${CURRENT_CRON}]: " NEW_CRON
-
-    if [ -z "$NEW_CRON" ]; then
-        NEW_CRON="$CURRENT_CRON"
-    fi
-
-    # Aktualizacja reguły EventBridge z nowym cronem
-    echo -e "Aktualizacja auto-stop na: ${GREEN}${NEW_CRON}${NC}"
-    aws_cmd events put-rule \
-        --name "$RULE_NAME" \
-        --schedule-expression "$NEW_CRON" \
-        --state ENABLED \
-        --region "$AWS_REGION" > /dev/null 2>&1 || {
-            echo -e "${YELLOW}Uwaga: Nie udalo sie zaktualizowac crona (brak uprawnien?). Kontynuuje z aktualnym.${NC}"
-        }
-
-    # Uruchomienie serwisu (desired-count 1)
-    echo -e "Uruchamianie bastionu..."
-    aws_cmd ecs update-service \
-        --cluster "$CLUSTER_NAME" \
-        --service "$SERVICE_NAME" \
-        --desired-count 1 \
-        --region "$AWS_REGION" > /dev/null 2>&1
-
-    if [ $? -ne 0 ]; then
-        echo -e "${RED}Blad: Nie udalo sie uruchomic serwisu. Sprawdz uprawnienia AWS.${NC}"
-        exit 1
-    fi
-
-    # Oczekiwanie na uruchomienie taska
-    echo -e "Czekanie na uruchomienie taska..."
-    for i in $(seq 1 60); do
-        TASK_ARN=$(aws_cmd ecs list-tasks \
-            --cluster "$CLUSTER_NAME" \
-            --service-name "$SERVICE_NAME" \
-            --desired-status RUNNING \
-            --region "$AWS_REGION" \
-            --query 'taskArns[0]' \
-            --output text 2>/dev/null || echo "")
-
-        if [ -n "$TASK_ARN" ] && [ "$TASK_ARN" != "None" ]; then
-            break
-        fi
-        printf "\r  [%d/60] Oczekiwanie na task..." "$i"
-        sleep 5
-    done
-    echo ""
-
-    if [ -z "$TASK_ARN" ] || [ "$TASK_ARN" = "None" ]; then
-        echo -e "${RED}Blad: Task nie uruchomil sie w ciagu 5 minut.${NC}"
-        exit 1
-    fi
-
+if [ -n "$TASK_ARN" ] && [ "$TASK_ARN" != "None" ]; then
+    BASTION_RUNNING=true
     TASK_ID=$(echo "$TASK_ARN" | awk -F'/' '{print $NF}')
-    echo -e "Task uruchomiony: ${GREEN}$TASK_ID${NC}"
+    echo -e "Status: ${GREEN}RUNNING${NC} (Task: ${TASK_ID})"
 
-    # Oczekiwanie na SSM Agent
-    echo -e "Czekanie na SSM Agent..."
-    for i in $(seq 1 20); do
-        AGENT_STATUS=$(aws_cmd ecs describe-tasks \
-            --cluster "$CLUSTER_NAME" \
-            --tasks "$TASK_ID" \
-            --region "$AWS_REGION" \
-            --query 'tasks[0].containers[0].managedAgents[?name==`ExecuteCommandAgent`].lastStatus' \
-            --output text 2>/dev/null || echo "")
+    # Pobranie runtime ID kontenera (potrzebne do shell i port forwarding)
+    CONTAINER_INFO=$(aws_cmd ecs describe-tasks \
+        --cluster "$CLUSTER_NAME" \
+        --tasks "$TASK_ID" \
+        --region "$AWS_REGION" \
+        --query 'tasks[0].containers[0].[name,runtimeId]' \
+        --output text 2>/dev/null || echo "")
+    CONTAINER_NAME=$(echo "$CONTAINER_INFO" | awk '{print $1}')
+    RUNTIME_ID=$(echo "$CONTAINER_INFO" | awk '{print $2}')
+else
+    BASTION_RUNNING=false
+    echo -e "Status: ${YELLOW}ZATRZYMANY${NC}"
+fi
 
-        if [ "$AGENT_STATUS" = "RUNNING" ]; then
-            echo -e "  SSM Agent: ${GREEN}RUNNING${NC}"
-            break
-        fi
-        printf "\r  [%d/20] SSM Agent: %s..." "$i" "${AGENT_STATUS:-starting}"
-        sleep 5
-    done
-    echo ""
-
-    if [ "$AGENT_STATUS" != "RUNNING" ]; then
-        echo -e "${YELLOW}Uwaga: SSM Agent moze nie byc jeszcze gotowy. Sprobuj polaczyc sie za chwile.${NC}"
+# 4. Glowne menu
+echo -e "\n${BLUE}===================================================${NC}"
+if [ "$BASTION_RUNNING" = true ]; then
+    echo -e "${YELLOW}Wybierz akcję:${NC}"
+    echo -e "1) Interaktywna sesja Shell (Terminal w bastionie)"
+    echo -e "2) Port Forwarding (Tunel do bazy danych/serwisu w VPC)"
+    echo -e "3) Zatrzymaj bastion (stop)"
+    echo -e "4) Wyjście"
+    read -rp "Wybór (1-4): " OPTION
+else
+    echo -e "${YELLOW}Wybierz akcję:${NC}"
+    echo -e "1) Uruchom bastion (start)"
+    echo -e "2) Wyjście"
+    read -rp "Wybór (1-2): " OPTION
+    # Mapowanie na wewnetrzne kody akcji
+    if [ "$OPTION" = "1" ]; then
+        OPTION="START"
+    else
+        OPTION="EXIT"
     fi
-
-    echo -e "${GREEN}Bastion uruchomiony pomyslnie!${NC}"
 fi
 
-TASK_ID=$(echo "$TASK_ARN" | awk -F'/' '{print $NF}')
-echo -e "Znaleziono aktywny Task ID: ${GREEN}$TASK_ID${NC}"
-
-# 4. Pobranie runtime ID kontenera (potrzebne do SSM Port Forwarding)
-CONTAINER_INFO=$(aws_cmd ecs describe-tasks \
-    --cluster "$CLUSTER_NAME" \
-    --tasks "$TASK_ID" \
-    --region "$AWS_REGION" \
-    --query 'tasks[0].containers[0].[name,runtimeId]' \
-    --output text 2>/dev/null || echo "")
-
-CONTAINER_NAME=$(echo "$CONTAINER_INFO" | awk '{print $1}')
-RUNTIME_ID=$(echo "$CONTAINER_INFO" | awk '{print $2}')
-
-if [ -z "$RUNTIME_ID" ] || [ "$RUNTIME_ID" = "None" ]; then
-    echo -e "${RED}Błąd: Nie można pobrać Runtime ID kontenera. Czy kontener zakończył uruchamianie?${NC}"
-    exit 1
-fi
-
-# Interaktywne menu
-echo -e "\n${YELLOW}Wybierz akcję:${NC}"
-echo -e "1) Interaktywna sesja Shell (Terminal w bastionie)"
-echo -e "2) Port Forwarding (Tunel do bazy danych/serwisu w VPC)"
-echo -e "3) Wyjście"
-read -rp "Wybór (1-3): " OPTION
-
+# 5. Obsluga akcji
 case "$OPTION" in
+    START)
+        # Pobranie aktualnego crona z EventBridge
+        RULE_NAME="${BASTION_NAME}-auto-stop"
+        CURRENT_CRON=$(aws_cmd events describe-rule \
+            --name "$RULE_NAME" \
+            --region "$AWS_REGION" \
+            --query 'ScheduleExpression' \
+            --output text 2>/dev/null || echo "cron(0 23 * * ? *)")
+
+        echo -e "\nAktualny cron auto-stop (UTC): ${GREEN}${CURRENT_CRON}${NC}"
+        echo -e "${YELLOW}Podaj nowy cron auto-stop (UTC) lub wcisnij Enter aby zachowac aktualny:${NC}"
+        echo -e "  Przyklady: cron(0 23 * * ? *)  = codziennie 23:00 UTC"
+        echo -e "             cron(0 18 * * ? *)  = codziennie 18:00 UTC"
+        echo -e "             cron(0 21 * * ? *)  = codziennie 21:00 UTC"
+        read -rp "Cron [${CURRENT_CRON}]: " NEW_CRON
+
+        if [ -z "$NEW_CRON" ]; then
+            NEW_CRON="$CURRENT_CRON"
+        fi
+
+        # Aktualizacja reguly EventBridge z nowym cronem
+        echo -e "Aktualizacja auto-stop na: ${GREEN}${NEW_CRON}${NC}"
+        aws_cmd events put-rule \
+            --name "$RULE_NAME" \
+            --schedule-expression "$NEW_CRON" \
+            --state ENABLED \
+            --region "$AWS_REGION" > /dev/null 2>&1 || {
+                echo -e "${YELLOW}Uwaga: Nie udalo sie zaktualizowac crona (brak uprawnien?). Kontynuuje z aktualnym.${NC}"
+            }
+
+        # Uruchomienie serwisu (desired-count 1)
+        echo -e "Uruchamianie bastionu..."
+        aws_cmd ecs update-service \
+            --cluster "$CLUSTER_NAME" \
+            --service "$SERVICE_NAME" \
+            --desired-count 1 \
+            --region "$AWS_REGION" > /dev/null 2>&1
+
+        if [ $? -ne 0 ]; then
+            echo -e "${RED}Blad: Nie udalo sie uruchomic serwisu. Sprawdz uprawnienia AWS.${NC}"
+            exit 1
+        fi
+
+        # Oczekiwanie na uruchomienie taska
+        echo -e "Czekanie na uruchomienie taska..."
+        for i in $(seq 1 60); do
+            TASK_ARN=$(aws_cmd ecs list-tasks \
+                --cluster "$CLUSTER_NAME" \
+                --service-name "$SERVICE_NAME" \
+                --desired-status RUNNING \
+                --region "$AWS_REGION" \
+                --query 'taskArns[0]' \
+                --output text 2>/dev/null || echo "")
+
+            if [ -n "$TASK_ARN" ] && [ "$TASK_ARN" != "None" ]; then
+                break
+            fi
+            printf "\r  [%d/60] Oczekiwanie na task..." "$i"
+            sleep 5
+        done
+        echo ""
+
+        if [ -z "$TASK_ARN" ] || [ "$TASK_ARN" = "None" ]; then
+            echo -e "${RED}Blad: Task nie uruchomil sie w ciagu 5 minut.${NC}"
+            exit 1
+        fi
+
+        TASK_ID=$(echo "$TASK_ARN" | awk -F'/' '{print $NF}')
+        echo -e "Task uruchomiony: ${GREEN}$TASK_ID${NC}"
+
+        # Oczekiwanie na SSM Agent
+        echo -e "Czekanie na SSM Agent..."
+        for i in $(seq 1 20); do
+            AGENT_STATUS=$(aws_cmd ecs describe-tasks \
+                --cluster "$CLUSTER_NAME" \
+                --tasks "$TASK_ID" \
+                --region "$AWS_REGION" \
+                --query 'tasks[0].containers[0].managedAgents[?name==`ExecuteCommandAgent`].lastStatus' \
+                --output text 2>/dev/null || echo "")
+
+            if [ "$AGENT_STATUS" = "RUNNING" ]; then
+                echo -e "  SSM Agent: ${GREEN}RUNNING${NC}"
+                break
+            fi
+            printf "\r  [%d/20] SSM Agent: %s..." "$i" "${AGENT_STATUS:-starting}"
+            sleep 5
+        done
+        echo ""
+
+        if [ "$AGENT_STATUS" != "RUNNING" ]; then
+            echo -e "${YELLOW}Uwaga: SSM Agent moze nie byc jeszcze gotowy. Sprobuj polaczyc sie za chwile.${NC}"
+        fi
+
+        echo -e "${GREEN}Bastion uruchomiony pomyslnie! Uruchom skrypt ponownie aby polaczyc sie.${NC}"
+        ;;
     1)
         echo -e "\n${GREEN}Nawiązywanie połączenia shell z kontenerem...${NC}"
         echo -e "Wpisz 'exit' aby zakończyć sesję."
@@ -285,6 +292,27 @@ case "$OPTION" in
             --region "$AWS_REGION"
         ;;
     3)
+        LAMBDA_NAME="${BASTION_NAME}-auto-stop"
+        echo -e "\n${YELLOW}Zatrzymywanie bastionu (wywolanie Lambda ${LAMBDA_NAME})...${NC}"
+
+        RESPONSE=$(aws_cmd lambda invoke \
+            --function-name "$LAMBDA_NAME" \
+            --region "$AWS_REGION" \
+            --payload '{}' \
+            /dev/stdout 2>/dev/null) || {
+                echo -e "${RED}Blad: Nie udalo sie wywolac Lambda. Sprawdz uprawnienia.${NC}"
+                exit 1
+            }
+
+        if echo "$RESPONSE" | grep -q '"statusCode": 200'; then
+            echo -e "${GREEN}Bastion zatrzymany pomyslnie.${NC}"
+        else
+            echo -e "${RED}Lambda zwrocila blad:${NC}"
+            echo "$RESPONSE"
+            exit 1
+        fi
+        ;;
+    4|EXIT)
         echo -e "Do zobaczenia!"
         exit 0
         ;;
