@@ -12,17 +12,15 @@ jobs:
     steps:
       - name: Pobranie repozytorium
         uses: actions/checkout@v4
-        with:
-          persist-credentials: true
 
       - name: Instalacja Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: '1.5.7'
 
-      - name: Formatowanie Terraform
+      - name: Sprawdzenie formatowania Terraform
         working-directory: ./terraform
-        run: terraform fmt -recursive
+        run: terraform fmt -check -recursive
 
       - name: Inicjalizacja do walidacji
         working-directory: ./terraform
@@ -40,9 +38,9 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Skanowanie IaC i plików projektu (Trivy)
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@v0.28.0
         with:
           scan-type: 'config'
-          exit-code: '0' # Nie przerywaj buildu przy wykryciu problemow w IaC
+          exit-code: '1'
           ignore-unfixed: true
           severity: 'HIGH,CRITICAL'

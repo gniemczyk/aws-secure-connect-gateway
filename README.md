@@ -7,7 +7,7 @@ Efemeryczny bastion oparty na AWS ECS Fargate z dostępem przez ECS Exec (AWS Sy
 1. GitHub Workflow uruchamia kontener w ECS Fargate (wewnątrz Twojego VPC). Przy uruchomieniu można zdefiniować wyrażenie cron dla czasu wyłączenia.
 2. Automatycznie tworzona jest reguła **AWS EventBridge Scheduler**, która wyłączy bastion o wybranej godzinie (domyślnie codziennie o 23:00 UTC), chroniąc przed generowaniem kosztów przez noc.
 3. **CloudWatch Alarm** monitoruje błędy Lambda i alert w razie niepowodzenia auto-stopu.
-4. Łączysz się za pomocą lokalnego skryptu `./connect.sh` (oferuje menu z opcjami interaktywnej sesji shell lub tunelu port forwarding bezpośrednio na Twój komputer).
+4. Łączysz się za pomocą lokalnego skryptu `./connect.sh` (oferuje menu z opcjami interaktywnej sesji shell lub tunelu port forwarding bezpośrednio na Twój komputer). Jeśli bastion został wyłączony przez auto-stop, skrypt umożliwia ponowne uruchomienie bez użycia GitHub Actions (z opcją zmiany harmonogramu auto-stop).
 5. Wszystkie polecenia wpisywane w sesjach są audytowane i zapisywane w **AWS CloudWatch Logs** (strukturalne logowanie z Python logger).
 6. Ręczne wywołanie workflow **STOP** (lub automatyczny harmonogram) zatrzymuje/usuwa tymczasowe zasoby.
 
@@ -38,7 +38,6 @@ Settings → Secrets and variables → Actions → Secrets:
 | Secret | Wartość |
 |--------|---------|
 | `AWS_ROLE_ARN` | `arn:aws:iam::ACCOUNT_ID:role/github-actions-role` |
-| `AWS_ACCOUNT_ID` | `123456789012` |
 
 ### 3. GitHub Variables
 
@@ -103,6 +102,24 @@ aws ecs execute-command --cluster ephemeral-bastion-cluster --task TASK_ID --int
 1. GitHub → Actions → Run workflow
 2. Akcja: **STOP**
 3. Wszystkie zasoby zostaną usunięte
+
+### Ponowne uruchomienie po auto-stop (bez GitHub Actions)
+
+Gdy bastion został wyłączony przez harmonogram (EventBridge cron), nie musisz wchodzić w GitHub Actions - wystarczy uruchomić skrypt:
+
+```bash
+./connect.sh
+```
+
+Skrypt wykryje brak running taska i zaproponuje:
+1. Ponowne uruchomienie bastionu (`aws ecs update-service --desired-count 1`)
+2. Zmianę harmonogramu auto-stop (np. `cron(0 21 * * ? *)` = 21:00 UTC)
+3. Poczeka na uruchomienie taska i SSM Agenta
+4. Przejdzie do menu (shell / port forwarding)
+
+### CI Gate - walidacja przed deploy
+
+Workflow `lint-and-scan.yml` uruchamia się automatycznie na push do `main`. Jeśli walidacja Terraform lub skanowanie bezpieczeństwa nie przejdzie, workflow deploy (`Efemeryczny Bastion ECS Fargate`) zostanie zablokowany na branchu `main` do czasu naprawienia błędów.
 
 ### Przykłady użycia wewnątrz bastionu
 
@@ -199,15 +216,16 @@ Wybierz opcję `2) Port Forwarding` i podaj dane hosta docelowego w VPC (np. end
 .
 ├── .github/workflows/
 │   ├── deploy-bastion.yml    # GitHub Actions workflow (START/STOP)
-│   └── lint-and-scan.yml     # Workflow CI (format, validate, Trivy)
+│   └── lint-and-scan.yml     # Workflow CI (format, validate, Trivy) - blokuje deploy przy bledach
 ├── terraform/
 │   ├── backend.tf            # S3 backend
 │   ├── main.tf               # ECS, IAM, networking, EventBridge Scheduler
+│   ├── lambda_stop.py        # Lambda auto-stop (Python) - pakowana przez archive_file
 │   ├── variables.tf          # Zmienne
 │   └── outputs.tf            # Outputy
 ├── Dockerfile                # Minimal Alpine (~5-7 MB) - pakiety instalowane na żądanie
 ├── start.sh                  # Keepalive script
-├── connect.sh                # Lokalny skrypt do wygodnego łączenia i tunelowania portów (SSM)
+├── connect.sh                # Lokalny skrypt do laczenia, tunelowania i restartu bastionu (SSM)
 └── README.md
 ```
 
