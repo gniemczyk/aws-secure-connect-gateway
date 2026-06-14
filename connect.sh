@@ -99,9 +99,107 @@ TASK_ARN=$(aws_cmd ecs list-tasks \
     --output text 2>/dev/null || echo "")
 
 if [ -z "$TASK_ARN" ] || [ "$TASK_ARN" = "None" ]; then
-    echo -e "${RED}Błąd: Nie znaleziono uruchomionego kontenera bastionu.${NC}"
-    echo -e "${YELLOW}Upewnij się, że uruchomiłeś workflow START w GitHub Actions oraz używasz poprawnego profilu/regionu AWS.${NC}"
-    exit 1
+    echo -e "${YELLOW}Bastion nie jest uruchomiony (zostal wylaczony przez auto-stop lub recznie).${NC}"
+    read -rp "Czy chcesz uruchomic bastion ponownie? (T/n): " RESTART_CHOICE
+
+    if [[ "$RESTART_CHOICE" =~ ^[Nn]$ ]]; then
+        echo -e "Zakonczono."
+        exit 0
+    fi
+
+    # Pobranie aktualnego crona z EventBridge
+    RULE_NAME="${CLUSTER_NAME%-cluster}-auto-stop"
+    CURRENT_CRON=$(aws_cmd events describe-rule \
+        --name "$RULE_NAME" \
+        --region "$AWS_REGION" \
+        --query 'ScheduleExpression' \
+        --output text 2>/dev/null || echo "cron(0 23 * * ? *)")
+
+    echo -e "Aktualny cron auto-stop (UTC): ${GREEN}${CURRENT_CRON}${NC}"
+    echo -e "${YELLOW}Podaj nowy cron auto-stop (UTC) lub wcisnij Enter aby zachowac aktualny:${NC}"
+    echo -e "  Przyklady: cron(0 23 * * ? *)  = codziennie 23:00 UTC"
+    echo -e "             cron(0 18 * * ? *)  = codziennie 18:00 UTC"
+    echo -e "             cron(0 21 * * ? *)  = codziennie 21:00 UTC"
+    read -rp "Cron [${CURRENT_CRON}]: " NEW_CRON
+
+    if [ -z "$NEW_CRON" ]; then
+        NEW_CRON="$CURRENT_CRON"
+    fi
+
+    # Aktualizacja reguły EventBridge z nowym cronem
+    echo -e "Aktualizacja auto-stop na: ${GREEN}${NEW_CRON}${NC}"
+    aws_cmd events put-rule \
+        --name "$RULE_NAME" \
+        --schedule-expression "$NEW_CRON" \
+        --state ENABLED \
+        --region "$AWS_REGION" > /dev/null 2>&1 || {
+            echo -e "${YELLOW}Uwaga: Nie udalo sie zaktualizowac crona (brak uprawnien?). Kontynuuje z aktualnym.${NC}"
+        }
+
+    # Uruchomienie serwisu (desired-count 1)
+    echo -e "Uruchamianie bastionu..."
+    aws_cmd ecs update-service \
+        --cluster "$CLUSTER_NAME" \
+        --service "$SERVICE_NAME" \
+        --desired-count 1 \
+        --region "$AWS_REGION" > /dev/null 2>&1
+
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}Blad: Nie udalo sie uruchomic serwisu. Sprawdz uprawnienia AWS.${NC}"
+        exit 1
+    fi
+
+    # Oczekiwanie na uruchomienie taska
+    echo -e "Czekanie na uruchomienie taska..."
+    for i in $(seq 1 60); do
+        TASK_ARN=$(aws_cmd ecs list-tasks \
+            --cluster "$CLUSTER_NAME" \
+            --service-name "$SERVICE_NAME" \
+            --desired-status RUNNING \
+            --region "$AWS_REGION" \
+            --query 'taskArns[0]' \
+            --output text 2>/dev/null || echo "")
+
+        if [ -n "$TASK_ARN" ] && [ "$TASK_ARN" != "None" ]; then
+            break
+        fi
+        printf "\r  [%d/60] Oczekiwanie na task..." "$i"
+        sleep 5
+    done
+    echo ""
+
+    if [ -z "$TASK_ARN" ] || [ "$TASK_ARN" = "None" ]; then
+        echo -e "${RED}Blad: Task nie uruchomil sie w ciagu 5 minut.${NC}"
+        exit 1
+    fi
+
+    TASK_ID=$(echo "$TASK_ARN" | awk -F'/' '{print $NF}')
+    echo -e "Task uruchomiony: ${GREEN}$TASK_ID${NC}"
+
+    # Oczekiwanie na SSM Agent
+    echo -e "Czekanie na SSM Agent..."
+    for i in $(seq 1 20); do
+        AGENT_STATUS=$(aws_cmd ecs describe-tasks \
+            --cluster "$CLUSTER_NAME" \
+            --tasks "$TASK_ID" \
+            --region "$AWS_REGION" \
+            --query 'tasks[0].containers[0].managedAgents[?name==`ExecuteCommandAgent`].lastStatus' \
+            --output text 2>/dev/null || echo "")
+
+        if [ "$AGENT_STATUS" = "RUNNING" ]; then
+            echo -e "  SSM Agent: ${GREEN}RUNNING${NC}"
+            break
+        fi
+        printf "\r  [%d/20] SSM Agent: %s..." "$i" "${AGENT_STATUS:-starting}"
+        sleep 5
+    done
+    echo ""
+
+    if [ "$AGENT_STATUS" != "RUNNING" ]; then
+        echo -e "${YELLOW}Uwaga: SSM Agent moze nie byc jeszcze gotowy. Sprobuj polaczyc sie za chwile.${NC}"
+    fi
+
+    echo -e "${GREEN}Bastion uruchomiony pomyslnie!${NC}"
 fi
 
 TASK_ID=$(echo "$TASK_ARN" | awk -F'/' '{print $NF}')
