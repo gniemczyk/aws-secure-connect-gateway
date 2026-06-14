@@ -96,17 +96,24 @@ locals {
     for idx in range(0, local.max_subnets) : cidrsubnet(local.vpc_cidr, local.subnet_newbits, idx)
   ]
 
-  # Filtruj subnety ktore nakladaja sie z istniejacymi (w obu kierunkach)
-  # cidrcontains() sprawdza zawartosc zakresow, nie tylko dokladne dopasowanie
+  # Oblicz wszystkie bloki /24 zajete przez istniejace subnety:
+  # - Subnet z prefixem <= 24 (np. /20): rozwin do wszystkich /24 ktore zawiera
+  # - Subnet z prefixem > 24 (np. /28): znajdz /24 blok do ktorego nalezy
+  blocked_cidrs = toset(flatten([
+    for existing in local.existing_cidrs : (
+      tonumber(split("/", existing)[1]) <= 24
+      ? [
+        for i in range(0, pow(2, 24 - tonumber(split("/", existing)[1]))) :
+        cidrsubnet(existing, 24 - tonumber(split("/", existing)[1]), i)
+      ]
+      : ["${join(".", slice(split(".", split("/", existing)[0]), 0, 3))}.0/24"]
+    )
+  ]))
+
+  # Filtruj - zostaw tylko /24 bloki ktore nie koliduja z zadnym istniejacym subnetem
   available_cidrs = [
     for cidr in local.all_possible_cidrs : cidr
-    if !anytrue([
-      for existing in local.existing_cidrs :
-      # Czy istniejacy subnet zawiera nasz kandydat (np. istniejacy /20 zawiera nasz /24)
-      cidrcontains(existing, cidr) ||
-      # Czy nasz kandydat zawiera istniejacy subnet (np. istniejacy /28 jest w naszym /24)
-      cidrcontains(cidr, existing)
-    ])
+    if !contains(local.blocked_cidrs, cidr)
   ]
 
   # Fallback - wartosc nigdy nie zostanie uzyta dzieki precondition na uzyciu
