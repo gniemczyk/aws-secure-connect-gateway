@@ -111,6 +111,27 @@ Gdy bastion został wyłączony przez harmonogram (EventBridge cron), nie musisz
 ./connect.sh
 ```
 
+#### Konfiguracja connect.sh
+
+Na początku skryptu znajduje się domyślna nazwa bastionu (taka sama jak w Terraform i GitHub Actions):
+
+```bash
+DEFAULT_BASTION_NAME="ephemeral-bastion"
+```
+
+Skrypt zapyta o nazwę bastionu (Enter = domyślna). Z niej automatycznie wyznacza nazwy zasobów:
+- Klaster: `{nazwa}-cluster`
+- Serwis: `{nazwa}-service`
+- EventBridge rule: `{nazwa}-auto-stop`
+
+Można też pominąć pytanie przez zmienną środowiskową:
+
+```bash
+BASTION_NAME=my-bastion ./connect.sh
+```
+
+#### Jak działa restart
+
 Skrypt wykryje brak running taska i zaproponuje:
 1. Ponowne uruchomienie bastionu (`aws ecs update-service --desired-count 1`)
 2. Zmianę harmonogramu auto-stop (np. `cron(0 21 * * ? *)` = 21:00 UTC)

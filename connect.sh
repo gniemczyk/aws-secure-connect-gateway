@@ -5,6 +5,12 @@
 
 set -e
 
+# ===========================================================
+# KONFIGURACJA - domyslna nazwa bastionu (taka sama jak w Terraform i GitHub Actions)
+# ===========================================================
+DEFAULT_BASTION_NAME="ephemeral-bastion"
+# ===========================================================
+
 # Kolory do logow
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -30,10 +36,6 @@ if ! aws ssm start-session --help &> /dev/null; then
         exit 1
     fi
 fi
-
-# 2. Konfiguracja zmiennych (mozliwosc nadpisania przez ENV)
-CLUSTER_NAME="${CLUSTER_NAME:-ephemeral-bastion-cluster}"
-SERVICE_NAME="${SERVICE_NAME:-ephemeral-bastion-service}"
 
 # Wykrywanie profilu AWS
 AWS_PROFILES=$(aws configure list-profiles 2>/dev/null || echo "")
@@ -85,8 +87,32 @@ if [ -z "$AWS_REGION" ]; then
     echo -e "${YELLOW}Użyto domyślnego regionu: eu-central-1${NC}"
 fi
 
+# Nazwa bastionu (determinuje nazwy klastra, serwisu, itp.)
+BASTION_NAME="${BASTION_NAME:-}"
+if [ -z "$BASTION_NAME" ]; then
+    read -rp "Nazwa bastionu [${DEFAULT_BASTION_NAME}]: " BASTION_NAME
+    BASTION_NAME="${BASTION_NAME:-$DEFAULT_BASTION_NAME}"
+fi
+
+CLUSTER_NAME="${BASTION_NAME}-cluster"
+SERVICE_NAME="${BASTION_NAME}-service"
+
 echo -e "Region AWS: ${GREEN}$AWS_REGION${NC}"
 echo -e "Klaster ECS: ${GREEN}$CLUSTER_NAME${NC}"
+
+# Sprawdzenie czy klaster istnieje
+CLUSTER_STATUS=$(aws_cmd ecs describe-clusters \
+    --clusters "$CLUSTER_NAME" \
+    --region "$AWS_REGION" \
+    --query 'clusters[0].status' \
+    --output text 2>/dev/null || echo "")
+
+if [ -z "$CLUSTER_STATUS" ] || [ "$CLUSTER_STATUS" = "None" ] || [ "$CLUSTER_STATUS" = "INACTIVE" ]; then
+    echo -e "${RED}Klaster '${CLUSTER_NAME}' nie istnieje w regionie ${AWS_REGION}.${NC}"
+    echo -e "${YELLOW}Infrastruktura nie jest wdrozona. Uruchom workflow START w GitHub Actions:${NC}"
+    echo -e "  GitHub -> Actions -> Efemeryczny Bastion ECS Fargate -> Run workflow -> START"
+    exit 1
+fi
 
 # 3. Pobranie aktywnego taska ECS
 echo -e "Szukanie działającego kontenera bastionu..."
