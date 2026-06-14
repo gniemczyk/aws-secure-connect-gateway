@@ -1,0 +1,14 @@
+# Trivy - celowe wyjatki dla efemerycznego bastionu
+# Kazdy wpis ma uzasadnienie dlaczego jest suppresowany
+
+# Dockerfile: kontener wymaga root aby uzytkownicy mogli instalowac pakiety (apk add)
+DS-0002
+
+# ECR: workflow uzywa tagu :latest przy kazdym deployu - IMMUTABLE zlamalby push
+AWS-0031
+
+# Security Group: bastion wymaga pelnego outbound (ECR pull, dostep do zasobow VPC, internet)
+AWS-0104
+
+# Subnet: Fargate task wymaga publicznego IP do komunikacji z AWS API (bez NAT Gateway)
+AWS-0164

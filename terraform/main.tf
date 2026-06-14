@@ -11,7 +11,7 @@ resource "aws_ecr_repository" "bastion" {
   image_tag_mutability = "MUTABLE"
 
   image_scanning_configuration {
-    scan_on_push = false
+    scan_on_push = true
   }
 
   # Pozwala usunąć repozytorium nawet z obrazami przy terraform destroy
@@ -36,9 +36,9 @@ resource "aws_ecr_lifecycle_policy" "bastion" {
         rulePriority = 1
         description  = "Zachowaj tylko 2 najnowsze obrazy"
         selection = {
-          tagStatus     = "any"
-          countType     = "imageCountMoreThan"
-          countNumber   = 2
+          tagStatus   = "any"
+          countType   = "imageCountMoreThan"
+          countNumber = 2
         }
         action = {
           type = "expire"
@@ -81,11 +81,43 @@ data "aws_availability_zones" "available" {
 }
 
 locals {
-  vpc_cidr           = data.aws_vpc.selected.cidr_block
-  existing_cidrs     = toset([for subnet in data.aws_subnet.existing : subnet.cidr_block])
-  all_possible_cidrs = [for idx in range(0, 256) : cidrsubnet(local.vpc_cidr, 8, idx)]
-  available_cidrs    = [for cidr in local.all_possible_cidrs : cidr if !contains(local.existing_cidrs, cidr)]
-  new_subnet_cidr    = length(local.available_cidrs) > 0 ? local.available_cidrs[0] : local.all_possible_cidrs[0]
+  vpc_cidr       = data.aws_vpc.selected.cidr_block
+  vpc_prefix_len = tonumber(split("/", local.vpc_cidr)[1])
+
+  # Dynamicznie oblicz newbits aby zawsze tworzyc /24 subnety
+  # VPC /16 -> newbits=8 (256 subnetow), VPC /20 -> newbits=4 (16 subnetow)
+  subnet_newbits = 24 - local.vpc_prefix_len
+  max_subnets    = pow(2, local.subnet_newbits)
+
+  existing_cidrs = [for subnet in data.aws_subnet.existing : subnet.cidr_block]
+
+  # Generuj wszystkie mozliwe /24 subnety w VPC
+  all_possible_cidrs = [
+    for idx in range(0, local.max_subnets) : cidrsubnet(local.vpc_cidr, local.subnet_newbits, idx)
+  ]
+
+  # Oblicz wszystkie bloki /24 zajete przez istniejace subnety:
+  # - Subnet z prefixem <= 24 (np. /20): rozwin do wszystkich /24 ktore zawiera
+  # - Subnet z prefixem > 24 (np. /28): znajdz /24 blok do ktorego nalezy
+  blocked_cidrs = toset(flatten([
+    for existing in local.existing_cidrs : (
+      tonumber(split("/", existing)[1]) <= 24
+      ? [
+        for i in range(0, pow(2, 24 - tonumber(split("/", existing)[1]))) :
+        cidrsubnet(existing, 24 - tonumber(split("/", existing)[1]), i)
+      ]
+      : ["${join(".", slice(split(".", split("/", existing)[0]), 0, 3))}.0/24"]
+    )
+  ]))
+
+  # Filtruj - zostaw tylko /24 bloki ktore nie koliduja z zadnym istniejacym subnetem
+  available_cidrs = [
+    for cidr in local.all_possible_cidrs : cidr
+    if !contains(local.blocked_cidrs, cidr)
+  ]
+
+  # Fallback - wartosc nigdy nie zostanie uzyta dzieki precondition na uzyciu
+  new_subnet_cidr = length(local.available_cidrs) > 0 ? local.available_cidrs[0] : "0.0.0.0/32"
 }
 
 resource "aws_subnet" "bastion_subnet" {
@@ -98,6 +130,13 @@ resource "aws_subnet" "bastion_subnet" {
     Name        = "${var.bastion_name}-subnet"
     Environment = "ephemeral"
     ManagedBy   = "terraform"
+  }
+
+  lifecycle {
+    precondition {
+      condition     = length(local.available_cidrs) > 0
+      error_message = "Brak wolnych /24 CIDR w VPC ${var.vpc_id} (CIDR: ${local.vpc_cidr}). Wszystkie ${local.max_subnets} mozliwych subnetow /24 sa zajete lub nakladaja sie z istniejacymi subnetami."
+    }
   }
 }
 
@@ -460,9 +499,9 @@ resource "aws_iam_role_policy" "lambda_ecs_policy" {
 resource "aws_lambda_function" "auto_stop" {
   filename         = data.archive_file.lambda_zip.output_path
   function_name    = "${var.bastion_name}-auto-stop"
-  role            = aws_iam_role.lambda_role.arn
-  handler         = "lambda_stop.lambda_handler"
-  runtime         = "python3.11"
+  role             = aws_iam_role.lambda_role.arn
+  handler          = "lambda_stop.lambda_handler"
+  runtime          = "python3.11"
   source_code_hash = data.archive_file.lambda_zip.output_base64sha256
   timeout          = 30
 
@@ -514,12 +553,12 @@ resource "aws_cloudwatch_event_rule" "auto_stop" {
 }
 
 resource "aws_cloudwatch_event_target" "auto_stop" {
-  rule           = aws_cloudwatch_event_rule.auto_stop.name
-  target_id      = "${var.bastion_name}-auto-stop-target"
-  arn            = aws_lambda_function.auto_stop.arn
+  rule      = aws_cloudwatch_event_rule.auto_stop.name
+  target_id = "${var.bastion_name}-auto-stop-target"
+  arn       = aws_lambda_function.auto_stop.arn
 
   retry_policy {
-    maximum_retry_attempts = 3
+    maximum_retry_attempts       = 3
     maximum_event_age_in_seconds = 3600
   }
 }

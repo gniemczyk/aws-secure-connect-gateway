@@ -24,8 +24,33 @@ env:
   BASTION_NAME: ephemeral-bastion
 
 jobs:
+  check-ci:
+    name: 'Weryfikacja CI na main'
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Sprawdzenie statusu ostatniego CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "Sprawdzanie statusu workflow 'Walidacja i Bezpieczenstwo (CI)' na main..."
+
+          STATUS=$(gh api "repos/${{ github.repository }}/actions/workflows/lint-and-scan.yml/runs?branch=main&status=completed&per_page=1" \
+            --jq '.workflow_runs[0].conclusion' 2>/dev/null || echo "unknown")
+
+          echo "Status ostatniego CI: $STATUS"
+
+          if [ "$STATUS" != "success" ]; then
+            echo "::error::CI workflow nie przeszedl na main (status: ${STATUS}). Deploy zablokowany. Napraw bledy i zrob push na main."
+            exit 1
+          fi
+
+          echo "CI PASSED - deploy dozwolony."
+
   deploy:
     name: 'Zarządzanie Bastionem'
+    needs: check-ci
+    if: always() && (needs.check-ci.result == 'success' || github.ref != 'refs/heads/main')
     runs-on: ubuntu-latest
     permissions:
       id-token: write
