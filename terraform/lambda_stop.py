@@ -11,7 +11,7 @@ logger.setLevel(logging.INFO)
 ecs = boto3.client('ecs')
 cloudwatch = boto3.client('cloudwatch')
 
-def put_stop_failure_metric(cluster_name, service_name, region):
+def put_stop_failure_metric(cluster_name, service_name):
     """
     Wysyła metrykę do CloudWatch która uruchomi alarm w AWS Console
     """
@@ -82,12 +82,10 @@ def verify_service_stopped(cluster_name, service_name, max_wait_seconds=120):
 def lambda_handler(event, context):
     cluster_name = os.environ['CLUSTER_NAME']
     service_name = os.environ['SERVICE_NAME']
-    region = os.environ['AWS_REGION']
     
     logger.info(f"=== AUTO-STOP START ===")
     logger.info(f"Cluster: {cluster_name}")
     logger.info(f"Service: {service_name}")
-    logger.info(f"Region: {region}")
     
     try:
         # Krok 1: Sprawdź aktualny stan
@@ -155,7 +153,7 @@ def lambda_handler(event, context):
             logger.error(f"❌ {error_msg}")
             
             # 🔔 Wysyła metrykę która uruchomi ALARM w AWS Console
-            put_stop_failure_metric(cluster_name, service_name, region)
+            put_stop_failure_metric(cluster_name, service_name)
             
             return {
                 'statusCode': 500,
@@ -186,7 +184,7 @@ def lambda_handler(event, context):
             }
         
         # 🔔 Krytyczny błąd - wyślij metrykę do alarmu w konsoli
-        put_stop_failure_metric(cluster_name, service_name, region)
+        put_stop_failure_metric(cluster_name, service_name)
         
         return {
             'statusCode': 500,
@@ -203,7 +201,7 @@ def lambda_handler(event, context):
         logger.error(f"❌ {error_message}", exc_info=True)
         
         # 🔔 Wyślij metrykę dla każdego nieoczekiwanego błędu
-        put_stop_failure_metric(cluster_name, service_name, region)
+        put_stop_failure_metric(cluster_name, service_name)
         
         return {
             'statusCode': 500,
