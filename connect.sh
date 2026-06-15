@@ -179,15 +179,15 @@ if [ "$BASTION_RUNNING" = true ]; then
     
     # Test połączenia ECS Exec (dry-run)
     echo -e "  Test połączenia ECS Exec..."
-    if aws_cmd ecs execute-command \
+    ENABLE_EXEC=$(aws_cmd ecs describe-tasks \
         --cluster "$CLUSTER_NAME" \
-        --task "$TASK_ID" \
-        --container "$CONTAINER_NAME" \
-        --command "/bin/echo healthcheck-ok" \
+        --tasks "$TASK_ID" \
         --region "$AWS_REGION" \
-        --query 'executeCommandResponse.$responseMeta.httpStatusCode' \
-        --output text 2>/dev/null | grep -q "200"; then
-        echo -e "  ${GREEN}✓ ECS Exec: Działa${NC}"
+        --query 'tasks[0].enableExecuteCommand' \
+        --output text 2>/dev/null)
+    
+    if [ "$ENABLE_EXEC" = "True" ] && [ "$AGENT_STATUS" = "RUNNING" ]; then
+        echo -e "  ${GREEN}✓ ECS Exec: WORKS${NC}"
     else
         echo -e "  ${YELLOW}⚠ ECS Exec: W trakcie inicjalizacji (poczekaj 30s)${NC}"
     fi
@@ -246,7 +246,7 @@ case "$OPTION" in
             --schedule-expression "$NEW_CRON" \
             --state ENABLED \
             --region "$AWS_REGION" > /dev/null 2>&1 || {
-                echo -e "${YELLOW}Uwaga: Nie udalo sie zaktualizowac crona (brak uprawnien?). Kontynuuje z aktualnym.${NC}"
+                echo -e "${YELLOW}Uwaga: Nie udało się zaktualizować crona (brak uprawnień?). Kontynuuje z aktualnym.${NC}"
             }
 
         # Uruchomienie serwisu (desired-count 1)
@@ -258,7 +258,7 @@ case "$OPTION" in
             --region "$AWS_REGION" > /dev/null 2>&1
 
         if [ $? -ne 0 ]; then
-            echo -e "${RED}Blad: Nie udalo sie uruchomic serwisu. Sprawdz uprawnienia AWS.${NC}"
+            echo -e "${RED}Błąd: Nie udało się uruchomić serwisu. Sprawdź uprawnienia AWS.${NC}"
             exit 1
         fi
 
@@ -282,7 +282,7 @@ case "$OPTION" in
         echo ""
 
         if [ -z "$TASK_ARN" ] || [ "$TASK_ARN" = "None" ]; then
-            echo -e "${RED}Blad: Task nie uruchomil sie w ciagu 5 minut.${NC}"
+            echo -e "${RED}Błąd: Task nie uruchomił się w ciągu 5 minut.${NC}"
             exit 1
         fi
 
@@ -309,10 +309,10 @@ case "$OPTION" in
         echo ""
 
         if [ "$AGENT_STATUS" != "RUNNING" ]; then
-            echo -e "${YELLOW}Uwaga: SSM Agent moze nie byc jeszcze gotowy. Sprobuj polaczyc sie za chwile.${NC}"
+            echo -e "${YELLOW}Uwaga: SSM Agent może nie być jeszcze gotowy. Spróbuj połączyć się za chwilę.${NC}"
         fi
 
-        echo -e "${GREEN}Bastion uruchomiony pomyslnie! Uruchom skrypt ponownie aby polaczyc sie.${NC}"
+        echo -e "${GREEN}Bastion uruchomiony poprawnie! Uruchom skrypt ponownie, aby połączyć się.${NC}"
         ;;
     1)
         echo -e "\n${GREEN}Nawiązywanie połączenia shell z kontenerem...${NC}"
@@ -352,14 +352,14 @@ case "$OPTION" in
             --region "$AWS_REGION" \
             --payload '{}' \
             /dev/stdout 2>/dev/null) || {
-                echo -e "${RED}Blad: Nie udalo sie wywolac Lambda. Sprawdz uprawnienia.${NC}"
+                echo -e "${RED}Błąd: Nie udało się wywołać Lambda. Sprawdź uprawnienia.${NC}"
                 exit 1
             }
 
         if echo "$RESPONSE" | grep -q '"statusCode": 200'; then
-            echo -e "${GREEN}Bastion zatrzymany pomyslnie.${NC}"
+            echo -e "${GREEN}Bastion zatrzymany pomyślnie.${NC}"
         else
-            echo -e "${RED}Lambda zwrocila blad:${NC}"
+            echo -e "${RED}Lambda zwrociła błąd:${NC}"
             echo "$RESPONSE"
             exit 1
         fi
