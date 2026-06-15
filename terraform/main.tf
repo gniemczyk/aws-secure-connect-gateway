@@ -501,7 +501,6 @@ resource "aws_lambda_function" "auto_stop" {
     variables = {
       CLUSTER_NAME = aws_ecs_cluster.bastion_cluster.name
       SERVICE_NAME = aws_ecs_service.bastion_service.name
-      AWS_REGION   = var.region
     }
   }
 
@@ -591,7 +590,7 @@ resource "aws_cloudwatch_metric_alarm" "auto_stop_failure" {
   period              = 60
   statistic           = "Sum"
   threshold           = 1
-  alarm_description   = "🚨 BASTION AUTO-STOP FAILED - Serwis nie zatrzymał się automatycznie! Sprawdź CloudWatch Logs lub zatrzymaj ręcznie."
+  alarm_description   = "BASTION AUTO-STOP FAILED - Serwis nie zatrzymał się automatycznie! Sprawdź CloudWatch Logs lub zatrzymaj ręcznie."
   treat_missing_data  = "notBreaching"
 
   dimensions = {
