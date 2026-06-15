@@ -322,6 +322,21 @@ Wybierz opcję `2) Port Forwarding` i podaj dane hosta docelowego w VPC (np. end
 
 ## Troubleshooting
 
+### CloudWatch Alarms - wyjaśnienie
+
+Są dwa alarmy monitorujące auto-stop:
+
+| Alarm | Namespace | Metryka | Co monitoruje |
+|-------|-----------|---------|--------------|
+| `ephemeral-bastion-auto-stop-errors` | `AWS/Lambda` | `Errors` | Błędy samej Lambda (exceptions, timeouts, itp.) |
+| `ephemeral-bastion-stop-failure` | `Bastion/AutoStop` | `StopFailure` | Serwis ECS nie zatrzymał się po 120 sekund |
+
+**Stan alarmu:**
+- ✅ **OK** = brak problemu (prawidłowe)
+- 🔴 **ALARM** = coś poszło nie tak
+
+Jeśli jakiś alarm przejdzie w stan ALARM, zobaczyć go w **CloudWatch → Alarms → All alarms**.
+
 ### Lambda auto-stop zwraca błąd
 
 Sprawdź logi Lambda w CloudWatch:

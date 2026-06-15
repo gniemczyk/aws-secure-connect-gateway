@@ -147,6 +147,16 @@ fi
 if [ "$BASTION_RUNNING" = true ]; then
     echo -e "\n${BLUE}--- Health Check Bastionu ---${NC}"
     
+    # Pobranie aktualnego crona z EventBridge (auto-stop)
+    RULE_NAME="${BASTION_NAME}-auto-stop"
+    CURRENT_CRON=$(aws_cmd events describe-rule \
+        --name "$RULE_NAME" \
+        --region "$AWS_REGION" \
+        --query 'ScheduleExpression' \
+        --output text 2>/dev/null || echo "nieznany")
+    
+    echo -e "  Auto-stop Lambda (UTC): ${YELLOW}${CURRENT_CRON}${NC}"
+    
     # Sprawdzenie SSM Agent
     AGENT_STATUS=$(aws_cmd ecs describe-tasks \
         --cluster "$CLUSTER_NAME" \
