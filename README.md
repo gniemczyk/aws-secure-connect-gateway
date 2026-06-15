@@ -330,7 +330,19 @@ Sprawdź logi Lambda w CloudWatch:
 aws logs tail "/aws/lambda/ephemeral-bastion-auto-stop" --region eu-north-1 --follow
 ```
 
-Jeśli CloudWatch Alarm `ephemeral-bastion-auto-stop-errors` jest w stanie **ALARM**, oznacza to że Lambda miała błąd przy próbie zatrzymania bastionu (zwykle: błąd parametrów AWS API, brak uprawnień IAM).
+Jeśli CloudWatch Alarm `ephemeral-bastion-auto-stop-errors` lub `ephemeral-bastion-stop-failure` jest w stanie **ALARM**, oznacza to że Lambda miała błąd przy próbie zatrzymania bastionu.
+
+**Gdzie sprawdzić alarm w konsoli:**
+- CloudWatch → Alarms → All alarms → szukaj `ephemeral-bastion-stop-failure` (status: 🔴 ALARM)
+
+**Ręczne zatrzymanie:**
+```bash
+aws ecs update-service \
+  --cluster ephemeral-bastion-cluster \
+  --service ephemeral-bastion-service \
+  --desired-count 0 \
+  --region eu-north-1
+```
 
 ### "TargetNotConnectedException" przy execute-command
 

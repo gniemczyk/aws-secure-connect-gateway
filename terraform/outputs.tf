@@ -21,3 +21,19 @@ output "ecs_exec_log_group_name" {
 output "ecr_repository_url" {
   value = aws_ecr_repository.bastion.repository_url
 }
+
+output "lambda_function_name" {
+  value = aws_lambda_function.auto_stop.function_name
+}
+
+output "cloudwatch_alarm_names" {
+  value = [
+    aws_cloudwatch_metric_alarm.lambda_errors.alarm_name,
+    aws_cloudwatch_metric_alarm.auto_stop_failure.alarm_name
+  ]
+}
+
+output "console_notification_info" {
+  description = "AWS Console alert location"
+  value       = "CloudWatch -> Alarms -> ${var.bastion_name}-stop-failure (ALARM when auto-stop fails)"
+}
