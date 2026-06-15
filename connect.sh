@@ -202,6 +202,39 @@ if [ "$BASTION_RUNNING" = true ]; then
         echo -e "  ${YELLOW}⚠ ECS Exec: W trakcie inicjalizacji (poczekaj 30s)${NC}"
     fi
     
+    # Sprawdzenie statusu alarmów CloudWatch
+    echo -e "\n${BLUE}--- CloudWatch Alarms ---${NC}"
+    
+    # Alarm 1: Lambda Errors
+    ALARM_ERRORS=$(aws_cmd cloudwatch describe-alarms \
+        --alarm-names "${BASTION_NAME}-auto-stop-errors" \
+        --region "$AWS_REGION" \
+        --query 'MetricAlarms[0].StateValue' \
+        --output text 2>/dev/null || echo "UNKNOWN")
+    
+    if [ "$ALARM_ERRORS" = "OK" ]; then
+        echo -e "  ${GREEN}✓ Lambda Errors: OK${NC}"
+    elif [ "$ALARM_ERRORS" = "ALARM" ]; then
+        echo -e "  ${RED}✗ Lambda Errors: ALARM${NC}"
+    else
+        echo -e "  ${YELLOW}⚠ Lambda Errors: ${ALARM_ERRORS}${NC}"
+    fi
+    
+    # Alarm 2: Stop Failure
+    ALARM_STOP=$(aws_cmd cloudwatch describe-alarms \
+        --alarm-names "${BASTION_NAME}-stop-failure" \
+        --region "$AWS_REGION" \
+        --query 'MetricAlarms[0].StateValue' \
+        --output text 2>/dev/null || echo "UNKNOWN")
+    
+    if [ "$ALARM_STOP" = "OK" ]; then
+        echo -e "  ${GREEN}✓ Stop Failure: OK${NC}"
+    elif [ "$ALARM_STOP" = "ALARM" ]; then
+        echo -e "  ${RED}✗ Stop Failure: ALARM${NC}"
+    else
+        echo -e "  ${YELLOW}⚠ Stop Failure: ${ALARM_STOP}${NC}"
+    fi
+    
     echo -e "${BLUE}--- Koniec Health Check ---${NC}"
 fi
 
