@@ -499,9 +499,9 @@ resource "aws_lambda_function" "auto_stop" {
 
   environment {
     variables = {
-      CLUSTER_NAME     = aws_ecs_cluster.bastion_cluster.name
-      SERVICE_NAME     = aws_ecs_service.bastion_service.name
-      BASTION_REGION   = var.region
+      CLUSTER_NAME   = aws_ecs_cluster.bastion_cluster.name
+      SERVICE_NAME   = aws_ecs_service.bastion_service.name
+      BASTION_REGION = var.region
     }
   }
 
