@@ -143,7 +143,59 @@ else
     echo -e "Status: ${YELLOW}ZATRZYMANY${NC}"
 fi
 
-# 4. Glowne menu
+# 4. Health check bastionu (tylko gdy running)
+if [ "$BASTION_RUNNING" = true ]; then
+    echo -e "\n${BLUE}--- Health Check Bastionu ---${NC}"
+    
+    # Sprawdzenie SSM Agent
+    AGENT_STATUS=$(aws_cmd ecs describe-tasks \
+        --cluster "$CLUSTER_NAME" \
+        --tasks "$TASK_ID" \
+        --region "$AWS_REGION" \
+        --query 'tasks[0].containers[0].managedAgents[?name==`ExecuteCommandAgent`].lastStatus' \
+        --output text 2>/dev/null || echo "")
+    
+    if [ "$AGENT_STATUS" = "RUNNING" ]; then
+        echo -e "  ${GREEN}✓ SSM Agent: RUNNING${NC}"
+    else
+        echo -e "  ${YELLOW}⚠ SSM Agent: ${AGENT_STATUS:-NOT RUNNING}${NC}"
+    fi
+    
+    # Sprawdzenie health check kontenera
+    CONTAINER_STATUS=$(aws_cmd ecs describe-tasks \
+        --cluster "$CLUSTER_NAME" \
+        --tasks "$TASK_ID" \
+        --region "$AWS_REGION" \
+        --query 'tasks[0].containers[0].healthStatus' \
+        --output text 2>/dev/null || echo "")
+    
+    if [ "$CONTAINER_STATUS" = "HEALTHY" ]; then
+        echo -e "  ${GREEN}✓ Health Check: HEALTHY${NC}"
+    elif [ "$CONTAINER_STATUS" = "UNKNOWN" ]; then
+        echo -e "  ${YELLOW}⚠ Health Check: UNKNOWN (czekaj 30-60s po starcie)${NC}"
+    else
+        echo -e "  ${RED}✗ Health Check: ${CONTAINER_STATUS}${NC}"
+    fi
+    
+    # Test połączenia ECS Exec (dry-run)
+    echo -e "  Test połączenia ECS Exec..."
+    if aws_cmd ecs execute-command \
+        --cluster "$CLUSTER_NAME" \
+        --task "$TASK_ID" \
+        --container "$CONTAINER_NAME" \
+        --command "/bin/echo healthcheck-ok" \
+        --region "$AWS_REGION" \
+        --query 'executeCommandResponse.$responseMeta.httpStatusCode' \
+        --output text 2>/dev/null | grep -q "200"; then
+        echo -e "  ${GREEN}✓ ECS Exec: Działa${NC}"
+    else
+        echo -e "  ${YELLOW}⚠ ECS Exec: W trakcie inicjalizacji (poczekaj 30s)${NC}"
+    fi
+    
+    echo -e "${BLUE}--- Koniec Health Check ---${NC}"
+fi
+
+# 5. Glowne menu
 echo -e "\n${BLUE}===================================================${NC}"
 if [ "$BASTION_RUNNING" = true ]; then
     echo -e "${YELLOW}Wybierz akcję:${NC}"
@@ -165,7 +217,7 @@ else
     fi
 fi
 
-# 5. Obsluga akcji
+# 6. Obsluga akcji
 case "$OPTION" in
     START)
         # Pobranie aktualnego crona z EventBridge
