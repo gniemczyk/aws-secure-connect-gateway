@@ -2,6 +2,21 @@
 
 Efemeryczny bastion oparty na AWS ECS Fargate z dostępem przez ECS Exec (AWS Systems Manager).
 
+## Health Check
+
+Skrypt `connect.sh` sprawdza stan bastionu przed połączeniem:
+- SSM Agent status (RUNNING/NOT RUNNING)
+- Health Check kontenera (HEALTHY/UNKNOWN/FAILED)
+- ECS Exec dry-run
+
+```
+--- Health Check Bastionu ---
+  ✓ SSM Agent: RUNNING
+  ✓ Health Check: HEALTHY
+  ✓ ECS Exec: Działa
+--- Koniec Health Check ---
+```
+
 ## Jak działa
 
 1. GitHub Workflow uruchamia kontener w ECS Fargate (wewnątrz Twojego VPC). Przy uruchomieniu można zdefiniować wyrażenie cron dla czasu wyłączenia.
@@ -168,6 +183,8 @@ Skrypt wyświetla menu dostosowane do stanu bastionu:
 Start uruchamia serwis ECS (`desired-count 1`), czeka na task i SSM Agent, potem prosi o ponowne uruchomienie skryptu.
 Stop wywołuje Lambda `{nazwa}-auto-stop` (ta sama co EventBridge cron).
 
+**Health Check**: Gdy bastion działa, skrypt automatycznie sprawdza status SSM Agent, health check kontenera i testuje połączenie ECS Exec.
+
 ### CI Gate - walidacja przed deploy
 
 Workflow `lint-and-scan.yml` uruchamia się automatycznie na push do `main`. Jeśli walidacja Terraform lub skanowanie bezpieczeństwa nie przejdzie, workflow deploy (`Efemeryczny Bastion ECS Fargate`) zostanie zablokowany na branchu `main` do czasu naprawienia błędów.
@@ -305,6 +322,21 @@ Wybierz opcję `2) Port Forwarding` i podaj dane hosta docelowego w VPC (np. end
 
 ## Troubleshooting
 
+### CloudWatch Alarms - wyjaśnienie
+
+Są dwa alarmy monitorujące auto-stop:
+
+| Alarm | Namespace | Metryka | Co monitoruje |
+|-------|-----------|---------|--------------|
+| `ephemeral-bastion-auto-stop-errors` | `AWS/Lambda` | `Errors` | Błędy samej Lambda (exceptions, timeouts, itp.) |
+| `ephemeral-bastion-stop-failure` | `Bastion/AutoStop` | `StopFailure` | Serwis ECS nie zatrzymał się po 120 sekund |
+
+**Stan alarmu:**
+- ✅ **OK** = brak problemu (prawidłowe)
+- 🔴 **ALARM** = coś poszło nie tak
+
+Jeśli jakiś alarm przejdzie w stan ALARM, zobaczyć go w **CloudWatch → Alarms → All alarms**.
+
 ### Lambda auto-stop zwraca błąd
 
 Sprawdź logi Lambda w CloudWatch:
@@ -313,7 +345,19 @@ Sprawdź logi Lambda w CloudWatch:
 aws logs tail "/aws/lambda/ephemeral-bastion-auto-stop" --region eu-north-1 --follow
 ```
 
-Jeśli CloudWatch Alarm `ephemeral-bastion-auto-stop-errors` jest w stanie **ALARM**, oznacza to że Lambda miała błąd przy próbie zatrzymania bastionu (zwykle: błąd parametrów AWS API, brak uprawnień IAM).
+Jeśli CloudWatch Alarm `ephemeral-bastion-auto-stop-errors` lub `ephemeral-bastion-stop-failure` jest w stanie **ALARM**, oznacza to że Lambda miała błąd przy próbie zatrzymania bastionu.
+
+**Gdzie sprawdzić alarm w konsoli:**
+- CloudWatch → Alarms → All alarms → szukaj `ephemeral-bastion-stop-failure` (status: 🔴 ALARM)
+
+**Ręczne zatrzymanie:**
+```bash
+aws ecs update-service \
+  --cluster ephemeral-bastion-cluster \
+  --service ephemeral-bastion-service \
+  --desired-count 0 \
+  --region eu-north-1
+```
 
 ### "TargetNotConnectedException" przy execute-command
 
@@ -342,6 +386,15 @@ brew install --cask session-manager-plugin
 ### Terraform błędy przy powtórnym START
 
 Workflow automatycznie importuje istniejące zasoby. Jeśli nadal są błędy - uruchom STOP, potem START.
+
+### Health Check nie przechodzi
+
+| Problem | Rozwiązanie |
+|---------|-------------|
+| `SSM Agent: NOT RUNNING` | Poczekaj 30-60s po starcie taska. |
+| `Health Check: UNKNOWN` | Poczekaj 60s i sprawdź ponownie. |
+| `Health Check: FAILED` | Sprawdź CloudWatch Logs. |
+| `ECS Exec: W trakcie inicjalizacji` | Poczekaj 30s i uruchom `connect.sh` ponownie. |
 
 ## Bezpieczeństwo
 

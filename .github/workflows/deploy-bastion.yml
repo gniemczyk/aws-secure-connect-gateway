@@ -369,7 +369,7 @@ jobs:
           echo "Usuwanie log group: $LOG_GROUP"
           aws logs delete-log-group \
             --log-group-name "$LOG_GROUP" \
-            --region ${{ env.AWS_REGION }} 2>/dev/null || echo "Log group nie istnieje lub juz usuniety"
+            --region ${{ env.TFSTATE_REGION }} 2>/dev/null || echo "Log group nie istnieje lub juz usuniety"
 
       - name: Usuwanie S3 bucketu
         if: github.event.inputs.action == 'STOP' && success()

@@ -476,6 +476,13 @@ resource "aws_iam_role_policy" "lambda_ecs_policy" {
           "logs:PutLogEvents"
         ]
         Resource = "*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "cloudwatch:PutMetricData"
+        ]
+        Resource = "*"
       }
     ]
   })
@@ -492,8 +499,9 @@ resource "aws_lambda_function" "auto_stop" {
 
   environment {
     variables = {
-      CLUSTER_NAME = aws_ecs_cluster.bastion_cluster.name
-      SERVICE_NAME = aws_ecs_service.bastion_service.name
+      CLUSTER_NAME   = aws_ecs_cluster.bastion_cluster.name
+      SERVICE_NAME   = aws_ecs_service.bastion_service.name
+      BASTION_REGION = var.region
     }
   }
 
@@ -550,6 +558,7 @@ resource "aws_cloudwatch_event_target" "auto_stop" {
 
 # --- CLOUDWATCH ALARM ---
 
+# Alarm 1: Błędy Lambda (istniejący)
 resource "aws_cloudwatch_metric_alarm" "lambda_errors" {
   alarm_name          = "${var.bastion_name}-auto-stop-errors"
   comparison_operator = "GreaterThanOrEqualToThreshold"
@@ -564,6 +573,30 @@ resource "aws_cloudwatch_metric_alarm" "lambda_errors" {
 
   dimensions = {
     FunctionName = aws_lambda_function.auto_stop.function_name
+  }
+
+  tags = {
+    Environment = "ephemeral"
+    ManagedBy   = "terraform"
+  }
+}
+
+# Alarm 2: Własna metryka StopFailure (dzwonek w konsoli)
+resource "aws_cloudwatch_metric_alarm" "auto_stop_failure" {
+  alarm_name          = "${var.bastion_name}-stop-failure"
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 1
+  metric_name         = "StopFailure"
+  namespace           = "Bastion/AutoStop"
+  period              = 60
+  statistic           = "Sum"
+  threshold           = 1
+  alarm_description   = "BASTION AUTO-STOP FAILED - Serwis nie zatrzymał się automatycznie! Sprawdź CloudWatch Logs lub zatrzymaj ręcznie."
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    ClusterName = aws_ecs_cluster.bastion_cluster.name
+    ServiceName = aws_ecs_service.bastion_service.name
   }
 
   tags = {
